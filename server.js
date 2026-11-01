@@ -49,6 +49,7 @@ const REST_BASE =
   `https://${ENV_ID}.api.tcloudbasegateway.com/v1/rdb/rest`;
 const API_KEY = process.env.CLOUDBASE_API_KEY || '';
 const TABLE = process.env.MEMOS_TABLE || 'memos';
+const USERS = process.env.USERS_TABLE || 'users';
 
 const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD || 'memos2026';
 const SESSION_SECRET =
@@ -56,7 +57,7 @@ const SESSION_SECRET =
   crypto.createHash('sha256').update('wbmemos:' + ACCESS_PASSWORD).digest('hex');
 
 const COOKIE_NAME = 'wbmemos';
-const SESSION_MAX_AGE = 60 * 60 * 24 * 30; // 30 天
+const SESSION_MAX_AGE = 60 * 60 * 24 * 365; // 1 年：token 链接进入后长期免密
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -119,6 +120,7 @@ function toDto(row) {
     id: row.id,
     content: row.content,
     tags: row.tags || [],
+    author: row.author || '管理员',
     pinned: !!row.pinned,
     createdTs: Number.isFinite(created) ? created : Date.now(),
     updatedTs: Number.isFinite(updated) ? updated : Date.now(),
@@ -142,22 +144,38 @@ function sign(payload) {
   return crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
 }
 
-function issueToken() {
-  const exp = String(Date.now() + SESSION_MAX_AGE * 1000);
-  return `${exp}.${sign(exp)}`;
+function issueToken(session) {
+  const exp = Date.now() + SESSION_MAX_AGE * 1000;
+  const body = Buffer.from(JSON.stringify({ exp, name: session.name, role: session.role })).toString('base64url');
+  return `${body}.${sign(body)}`;
 }
 
 function verifyToken(token) {
   if (!token || typeof token !== 'string') return false;
   const idx = token.lastIndexOf('.');
   if (idx <= 0) return false;
-  const exp = token.slice(0, idx);
+  const body = token.slice(0, idx);
   const sig = token.slice(idx + 1);
-  const expect = sign(exp);
+  const expect = sign(body);
   if (sig.length !== expect.length) return false;
   if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect))) return false;
-  const expMs = Number(exp);
-  return Number.isFinite(expMs) && expMs > Date.now();
+
+  let session = null;
+  let exp = NaN;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (payload && typeof payload.exp === 'number' && payload.name && payload.role) {
+      exp = payload.exp;
+      session = { name: String(payload.name).slice(0, 40), role: payload.role === 'admin' ? 'admin' : 'member' };
+    }
+  } catch { /* 旧版纯 exp 格式，走下面兼容分支 */ }
+  if (!session) {
+    // 兼容旧 cookie（"毫秒时间戳.签名"）
+    const n = Number(body);
+    if (Number.isFinite(n)) { exp = n; session = { name: '管理员', role: 'admin' }; }
+  }
+  if (!Number.isFinite(exp) || exp <= Date.now()) return false;
+  return session;
 }
 
 function parseCookies(req) {
@@ -173,8 +191,12 @@ function parseCookies(req) {
   return out;
 }
 
-function isAuthed(req) {
+function getSession(req) {
   return verifyToken(parseCookies(req)[COOKIE_NAME]);
+}
+
+function isAuthed(req) {
+  return !!getSession(req);
 }
 
 function cookieHeader(token, maxAge = SESSION_MAX_AGE) {
@@ -269,14 +291,26 @@ const server = http.createServer(async (req, res) => {
   const method = req.method || 'GET';
 
   try {
-    // ---- 登录 / 登出
+    // ---- 登录 / 登出 / token 免密进入
     if (p === '/api/login' && method === 'POST') {
       const body = await readBody(req);
       if (body.password !== ACCESS_PASSWORD) {
         return sendJson(res, 401, { error: 'bad_password' });
       }
-      return sendJson(res, 200, { ok: true }, {
-        'Set-Cookie': cookieHeader(issueToken()),
+      return sendJson(res, 200, { ok: true, name: '管理员', role: 'admin' }, {
+        'Set-Cookie': cookieHeader(issueToken({ name: '管理员', role: 'admin' })),
+      });
+    }
+
+    // 专属 token 链接免密登录：GET /api/auth?token=<uuid>
+    if (p === '/api/auth' && method === 'GET') {
+      const tk = url.searchParams.get('token') || '';
+      if (!/^[0-9a-fA-F-]{36}$/.test(tk)) return sendJson(res, 401, { error: 'bad_token' });
+      const rows = await rest(`${USERS}?token=eq.${tk}&select=name,role`);
+      const u = rows && rows[0];
+      if (!u) return sendJson(res, 401, { error: 'bad_token' });
+      return sendJson(res, 200, { ok: true, name: u.name, role: u.role }, {
+        'Set-Cookie': cookieHeader(issueToken({ name: u.name, role: u.role })),
       });
     }
 
@@ -296,10 +330,54 @@ const server = http.createServer(async (req, res) => {
       if (!isAuthed(req)) return sendJson(res, 401, { error: 'unauth' });
     }
 
+    // ---- 当前登录身份
+    if (p === '/api/me' && method === 'GET') {
+      const s = getSession(req);
+      return sendJson(res, 200, { name: s.name, role: s.role });
+    }
+
+    // ---- 成员管理（仅管理员）
+    if (p === '/api/users' && method === 'GET') {
+      const s = getSession(req);
+      if (s.role !== 'admin') return sendJson(res, 403, { error: 'forbidden' });
+      const rows = await rest(`${USERS}?select=id,name,role,token,created_at&order=role.desc,created_at.asc`);
+      return sendJson(res, 200, { users: rows || [] });
+    }
+
+    if (p === '/api/users' && method === 'POST') {
+      const s = getSession(req);
+      if (s.role !== 'admin') return sendJson(res, 403, { error: 'forbidden' });
+      const body = await readBody(req);
+      const name = typeof body.name === 'string' ? body.name.trim().slice(0, 24) : '';
+      if (!name) return sendJson(res, 400, { error: 'empty_name' });
+      const dup = await rest(`${USERS}?name=eq.${encodeURIComponent(name)}&select=id`);
+      if (dup && dup.length) return sendJson(res, 409, { error: 'name_exists' });
+      const row = await rest(USERS, {
+        method: 'POST',
+        body: [{ name, role: 'member' }],
+        prefer: 'return=representation',
+      });
+      const created = Array.isArray(row) ? row[0] : row;
+      return sendJson(res, 201, { user: { id: created.id, name: created.name, role: created.role, token: created.token } });
+    }
+
+    const mu = p.match(/^\/api\/users\/([^/]+)$/);
+    if (mu && method === 'DELETE') {
+      const s = getSession(req);
+      if (s.role !== 'admin') return sendJson(res, 403, { error: 'forbidden' });
+      const id = decodeURIComponent(mu[1]);
+      if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
+      const target = await rest(`${USERS}?id=eq.${id}&select=role`);
+      if (!target || !target.length) return sendJson(res, 404, { error: 'not_found' });
+      if (target[0].role === 'admin') return sendJson(res, 400, { error: 'cannot_delete_admin' });
+      await rest(`${USERS}?id=eq.${id}`, { method: 'DELETE' });
+      return sendJson(res, 200, { ok: true });
+    }
+
     // ---- 导出（放在 /api/memos/:id 之前匹配）
     if (p === '/api/memos/export' && method === 'GET') {
       const rows = await rest(
-        `${TABLE}?select=id,content,tags,pinned,created_at,updated_at&order=created_at.desc`
+        `${TABLE}?select=id,content,tags,author,pinned,created_at,updated_at&order=created_at.desc`
       );
       const memos = (rows || []).map(toDto);
       const stamp = new Date().toISOString().slice(0, 10);
@@ -313,20 +391,21 @@ const server = http.createServer(async (req, res) => {
     // ---- 列表
     if (p === '/api/memos' && method === 'GET') {
       const rows = await rest(
-        `${TABLE}?select=id,content,tags,pinned,created_at,updated_at&order=pinned.desc,created_at.desc`
+        `${TABLE}?select=id,content,tags,author,pinned,created_at,updated_at&order=pinned.desc,created_at.desc`
       );
       return sendJson(res, 200, { memos: (rows || []).map(toDto) });
     }
 
-    // ---- 新建
+    // ---- 新建（作者取当前登录身份）
     if (p === '/api/memos' && method === 'POST') {
+      const s = getSession(req);
       const body = await readBody(req);
       const content = typeof body.content === 'string' ? body.content.trim() : '';
       if (!content) return sendJson(res, 400, { error: 'empty' });
       const now = new Date().toISOString();
       const row = await rest(TABLE, {
         method: 'POST',
-        body: [{ content, tags: parseTags(content), created_at: now, updated_at: now }],
+        body: [{ content, tags: parseTags(content), author: s.name, created_at: now, updated_at: now }],
         prefer: 'return=representation',
       });
       const created = Array.isArray(row) ? row[0] : row;

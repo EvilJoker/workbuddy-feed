@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>My Memos · 个人信息流</title>
+<title>WorkBuddy Feed</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1f2329; --muted: #8a919f;
@@ -52,6 +52,24 @@
   .pop .newrow input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: 13px; }
   .pop .newrow button { border: 0; background: var(--accent); color: #fff; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 
+  /* 成员管理面板 */
+  #usersPanel { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 100; align-items: flex-start; justify-content: center; padding: 8vh 14px; }
+  #usersPanel.show { display: flex; }
+  #usersPanel .card { background: var(--card); border-radius: 14px; padding: 18px; width: 100%; max-width: 540px; max-height: 80vh; overflow: auto; }
+  #usersPanel h3 { margin-bottom: 4px; }
+  #usersPanel .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
+  .userrow { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 14px; flex-wrap: wrap; }
+  .userrow .name { font-weight: 600; min-width: 72px; }
+  .userrow .role { font-size: 11px; color: var(--muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; }
+  .userrow .link { flex: 1; min-width: 200px; color: var(--accent); font-size: 12px; word-break: break-all; }
+  .userrow button, .addrow button { border: 1px solid var(--border); background: none; border-radius: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--muted); }
+  .userrow button:hover { color: var(--accent); border-color: var(--accent); }
+  .addrow { display: flex; gap: 8px; margin-top: 14px; }
+  .addrow input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+  .addrow .primary { background: var(--accent); color: #fff; border: 0; font-size: 13px; padding: 8px 16px; }
+  #usersPanel .err { color: #d33; font-size: 12px; min-height: 15px; margin-top: 6px; }
+  header .who { color: var(--text); font-size: 13px; margin-right: 4px; }
+
   /* toolbar */
   .toolbar { display: flex; gap: 8px; margin: 6px 0 14px; flex-wrap: wrap; align-items: center; }
   .toolbar input[type=search] { flex: 1; min-width: 160px; padding: 9px 13px; border: 1px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--card); }
@@ -61,6 +79,7 @@
   .memo { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; }
   .memo.pinned { border-color: #f5c518; box-shadow: 0 0 0 1px #f5c51833; }
   .memo .meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; font-size: 12px; color: var(--muted); }
+  .memo .meta .who { color: var(--tag-text); background: var(--tag-bg); border-radius: 6px; padding: 1px 8px; font-weight: 600; }
   .memo .meta .pin-flag { color: #b8860b; font-weight: 600; }
   .memo .content { font-size: 15px; line-height: 1.7; word-break: break-word; }
   .memo .content code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
@@ -83,8 +102,8 @@
 <body>
 
 <div id="login">
-  <h1>📒 My Memos</h1>
-  <p>个人信息流 · 输入访问密码</p>
+  <h1>📒 WorkBuddy Feed</h1>
+  <p>团队信息流 · 输入访问密码（成员请用专属链接进入）</p>
   <div class="err" id="loginErr"></div>
   <input type="password" id="pwd" placeholder="访问密码" onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">进入</button>
@@ -93,8 +112,10 @@
 <div id="app" style="display:none">
   <div class="wrap">
     <header>
-      <div class="logo">📒 My <span>Memos</span></div>
-      <div>
+      <div class="logo">📒 WorkBuddy <span>Feed</span></div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="who" id="who"></span>
+        <button id="usersBtn" style="display:none" onclick="openUsers()">👥 成员</button>
         <button onclick="window.open('/api/memos/export')">⬇️ 导出</button>
         <button onclick="doLogout()">退出</button>
       </div>
@@ -136,9 +157,24 @@
   </div>
 </div>
 
+<div id="usersPanel">
+  <div class="card">
+    <h3>👥 成员管理</h3>
+    <div class="sub">每个成员一条专属链接，点开即免密进入，发布的消息会带上成员名字。把「专属链接」发给对应成员即可（手机上可添加到主屏幕）。</div>
+    <div id="userList"></div>
+    <div class="addrow">
+      <input id="newUserName" placeholder="成员名字，如 小明" maxlength="24" onkeydown="if(event.key==='Enter')addUser()">
+      <button class="primary" onclick="addUser()">＋ 添加成员</button>
+    </div>
+    <div class="err" id="usersErr"></div>
+    <div class="addrow"><button onclick="closeUsers()">关闭</button></div>
+  </div>
+</div>
+
 <script>
 let memos = [];
 let editingId = null;
+let me = { name: '', role: '' };
 
 async function api(path, opts) {
   opts = opts || {};
@@ -155,9 +191,16 @@ async function doLogin() {
 }
 function doLogout() { fetch('/api/logout', {method:'POST'}); location.reload(); }
 
+async function loadMe() {
+  try { me = await api('/api/me'); } catch (e) { me = { name: '', role: '' }; }
+  document.getElementById('who').textContent = me.name ? '👤 ' + me.name : '';
+  document.getElementById('usersBtn').style.display = me.role === 'admin' ? '' : 'none';
+}
+
 async function init() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+  await loadMe();
   const d = await api('/api/memos');
   memos = d.memos;
   render();
@@ -166,6 +209,57 @@ async function init() {
 function showLogin() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'block';
+}
+
+// ---- 成员管理（仅管理员） ----
+function personalLink(token) {
+  const sc = new URLSearchParams(location.search).get('sharecode');
+  return location.origin + '/?' + (sc ? 'sharecode=' + sc + '&' : '') + 'token=' + token;
+}
+
+async function openUsers() {
+  document.getElementById('usersPanel').classList.add('show');
+  document.getElementById('usersErr').textContent = '';
+  await loadUsers();
+}
+function closeUsers() { document.getElementById('usersPanel').classList.remove('show'); }
+
+async function loadUsers() {
+  const d = await api('/api/users');
+  const box = document.getElementById('userList');
+  box.innerHTML = d.users.map(u => `
+    <div class="userrow">
+      <span class="name">${u.name.replace(/</g,'&lt;')}</span>
+      <span class="role">${u.role === 'admin' ? '管理员' : '成员'}</span>
+      <span class="link" title="点击复制专属链接" style="cursor:pointer" onclick="copyLink('${u.token}')">${personalLink(u.token)}</span>
+      ${u.role === 'admin' ? '' : `<button onclick="delUser('${u.id}','${u.name.replace(/'/g,'')}')">删除</button>`}
+    </div>`).join('');
+}
+
+function copyLink(token) {
+  const link = personalLink(token);
+  (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject())
+    .catch(() => { const i = document.createElement('textarea'); i.value = link; document.body.appendChild(i); i.select(); document.execCommand('copy'); i.remove(); });
+  document.getElementById('usersErr').textContent = '已复制专属链接 ✓';
+}
+
+async function addUser() {
+  const inp = document.getElementById('newUserName');
+  const name = inp.value.trim();
+  if (!name) return;
+  const r = await fetch('/api/users', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { document.getElementById('usersErr').textContent = d.error === 'name_exists' ? '这个名字已存在' : '添加失败'; return; }
+  inp.value = '';
+  document.getElementById('usersErr').textContent = `已添加「${d.user.name}」，点击其链接可复制`;
+  await loadUsers();
+}
+
+async function delUser(id, name) {
+  if (!confirm(`确定删除成员「${name}」？其专属链接将立即失效。`)) return;
+  const r = await fetch('/api/users/' + id, { method: 'DELETE' });
+  if (!r.ok) { document.getElementById('usersErr').textContent = '删除失败'; return; }
+  await loadUsers();
 }
 
 async function post() {
@@ -302,7 +396,7 @@ function render() {
     }
     return `<div class="memo ${m.pinned?'pinned':''}">
       <div class="meta">
-        <span>${m.pinned ? '<span class="pin-flag">📌 置顶</span> · ' : ''}${fmt(m.createdTs)}</span>
+        <span>${m.pinned ? '<span class="pin-flag">📌 置顶</span> · ' : ''}<span class="who">👤 ${String(m.author||'管理员').replace(/</g,'&lt;')}</span> · ${fmt(m.createdTs)}</span>
         <span>${m.updatedTs > m.createdTs ? '已编辑' : ''}</span>
       </div>
       <div class="content">${esc(m.content)}</div>
@@ -315,9 +409,23 @@ function render() {
   }).join('');
 }
 
-// auto-login check: try fetching memos on load
-(async () => { try { const d = await api('/api/memos'); memos = d.memos; init2(); } catch(e) {} })();
-function init2() { document.getElementById('login').style.display='none'; document.getElementById('app').style.display='block'; render(); }
+// boot：URL 带 ?token= 时免密自动登录；否则尝试已有会话
+(async () => {
+  const sp = new URLSearchParams(location.search);
+  const tk = sp.get('token');
+  if (tk && /^[0-9a-fA-F-]{36}$/.test(tk)) {
+    const r = await fetch('/api/auth?token=' + encodeURIComponent(tk));
+    if (r.ok) {
+      // 清掉地址栏里的 token，保留 sharecode（网关需要）
+      const keep = sp.get('sharecode') ? '/?sharecode=' + sp.get('sharecode') : '/';
+      history.replaceState(null, '', keep);
+      await init();
+      return;
+    }
+    document.getElementById('loginErr').textContent = '链接无效或已被移除';
+  }
+  try { await init(); } catch (e) {}
+})();
 </script>
 </body>
 </html>
