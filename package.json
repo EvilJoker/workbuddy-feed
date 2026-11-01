@@ -1,0 +1,12 @@
+{
+  "name": "memos-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "My Memos - 个人 memo 服务，数据存 CloudBase PostgreSQL (PostgREST)",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "PORT=8080 node server.js"
+  }
+}

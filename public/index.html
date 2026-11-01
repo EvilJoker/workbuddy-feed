@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Memos · 个人信息流</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1f2329; --muted: #8a919f;
+    --accent: #1a73e8; --border: #e5e8ec; --tag-bg: #e8f0fe; --tag-text: #1a5cc8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
+  .wrap { max-width: 680px; margin: 0 auto; padding: 16px 14px 80px; }
+
+  /* login */
+  #login { max-width: 360px; margin: 18vh auto 0; background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px; text-align: center; }
+  #login h1 { font-size: 20px; margin-bottom: 6px; }
+  #login p { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  #login input { width: 100%; padding: 11px 14px; border: 1px solid var(--border); border-radius: 10px; font-size: 15px; margin-bottom: 12px; }
+  #login button { width: 100%; padding: 11px; background: var(--accent); color: #fff; border: 0; border-radius: 10px; font-size: 15px; cursor: pointer; }
+  #login .err { color: #d33; font-size: 13px; margin-bottom: 10px; min-height: 16px; }
+
+  /* header */
+  header { display: flex; justify-content: space-between; align-items: center; padding: 6px 2px 14px; }
+  header .logo { font-size: 19px; font-weight: 700; }
+  header .logo span { color: var(--accent); }
+  header button { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+
+  /* composer */
+  .composer { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+  .composer textarea { width: 100%; min-height: 90px; border: 0; resize: vertical; font-size: 15px; line-height: 1.6; font-family: inherit; outline: none; }
+  .composer .bar { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .composer .hint { color: var(--muted); font-size: 12px; }
+  .composer .btns { display: flex; gap: 8px; }
+  .composer .btns button { border: 0; border-radius: 9px; padding: 8px 18px; font-size: 14px; cursor: pointer; }
+  #postBtn { background: var(--accent); color: #fff; }
+
+  /* toolbar */
+  .toolbar { display: flex; gap: 8px; margin: 6px 0 14px; flex-wrap: wrap; align-items: center; }
+  .toolbar input[type=search] { flex: 1; min-width: 160px; padding: 9px 13px; border: 1px solid var(--border); border-radius: 10px; font-size: 14px; background: var(--card); }
+  .toolbar select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); font-size: 13px; color: var(--text); }
+
+  /* memo list */
+  .memo { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; }
+  .memo.pinned { border-color: #f5c518; box-shadow: 0 0 0 1px #f5c51833; }
+  .memo .meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; font-size: 12px; color: var(--muted); }
+  .memo .meta .pin-flag { color: #b8860b; font-weight: 600; }
+  .memo .content { font-size: 15px; line-height: 1.7; word-break: break-word; }
+  .memo .content code { background: #eef1f4; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .memo .content .tag { color: var(--tag-text); background: var(--tag-bg); padding: 0 5px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .memo .content a { color: var(--accent); }
+  .memo .actions { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .memo .actions span { cursor: pointer; user-select: none; }
+  .memo .actions span:hover { color: var(--accent); }
+  .memo textarea.editbox { width: 100%; min-height: 80px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 14px; line-height: 1.6; font-family: inherit; }
+  .empty { text-align: center; color: var(--muted); padding: 60px 0; font-size: 14px; }
+  .count { color: var(--muted); font-size: 12px; margin: 4px 2px 12px; }
+
+  /* mobile */
+  @media (max-width: 480px) {
+    .wrap { padding: 12px 10px 70px; }
+    .memo .content { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>📒 My Memos</h1>
+  <p>个人信息流 · 输入访问密码</p>
+  <div class="err" id="loginErr"></div>
+  <input type="password" id="pwd" placeholder="访问密码" onkeydown="if(event.key==='Enter')doLogin()">
+  <button onclick="doLogin()">进入</button>
+</div>
+
+<div id="app" style="display:none">
+  <div class="wrap">
+    <header>
+      <div class="logo">📒 My <span>Memos</span></div>
+      <div>
+        <button onclick="window.open('/api/memos/export')">⬇️ 导出</button>
+        <button onclick="doLogout()">退出</button>
+      </div>
+    </header>
+
+    <div class="composer">
+      <textarea id="input" placeholder="记录此刻的想法… 支持 #标签 `代码` **加粗** 和链接" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter')post()"></textarea>
+      <div class="bar">
+        <span class="hint">#标签 搜索可用 · Ctrl+Enter 发送</span>
+        <div class="btns"><button id="postBtn" onclick="post()">记录</button></div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="搜索内容或标签…" oninput="render()">
+      <select id="tagFilter" onchange="render()"><option value="">全部标签</option></select>
+      <select id="sortSel" onchange="render()">
+        <option value="new">最新优先</option>
+        <option value="old">最早优先</option>
+      </select>
+    </div>
+
+    <div class="count" id="count"></div>
+    <div id="list"></div>
+  </div>
+</div>
+
+<script>
+let memos = [];
+let editingId = null;
+
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  const r = await fetch(path, opts);
+  if (r.status === 401) { showLogin(); throw new Error('unauth'); }
+  return r.json();
+}
+
+async function doLogin() {
+  const pwd = document.getElementById('pwd').value;
+  const r = await fetch('/api/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: pwd}) });
+  if (r.ok) { init(); } else { document.getElementById('loginErr').textContent = '密码错误，请重试'; }
+}
+function doLogout() { fetch('/api/logout', {method:'POST'}); location.reload(); }
+
+async function init() {
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  const d = await api('/api/memos');
+  memos = d.memos;
+  render();
+}
+
+function showLogin() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login').style.display = 'block';
+}
+
+async function post() {
+  const el = document.getElementById('input');
+  if (!el.value.trim()) return;
+  await api('/api/memos', { method: 'POST', body: JSON.stringify({ content: el.value }) });
+  el.value = '';
+  const d = await api('/api/memos'); memos = d.memos; render();
+}
+
+function esc(s) {
+  let h = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+       .replace(/`([^`]+)`/g, '<code>$1</code>')
+       .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+       .replace(/(^|\s)(#[^\s<]+)/g, '$1<span class="tag" onclick="filterTag(\'$2\')">$2</span>');
+  return h.replace(/\n/g, '<br>');
+}
+
+function fmt(ts) {
+  const d = new Date(ts);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function filterTag(t) {
+  document.getElementById('q').value = t;
+  render();
+}
+
+function startEdit(id) {
+  editingId = id;
+  render();
+}
+
+async function saveEdit(id) {
+  const ta = document.querySelector('.editbox');
+  await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ content: ta.value }) });
+  editingId = null;
+  const d = await api('/api/memos'); memos = d.memos; render();
+}
+
+async function togglePin(id) {
+  const m = memos.find(x => x.id === id);
+  await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ pinned: !m.pinned }) });
+  const d = await api('/api/memos'); memos = d.memos; render();
+}
+
+async function del(id) {
+  if (!confirm('确定删除这条 memo？')) return;
+  await api('/api/memos/' + id, { method: 'DELETE' });
+  const d = await api('/api/memos'); memos = d.memos; render();
+}
+
+function render() {
+  const q = document.getElementById('q').value.trim().toLowerCase().replace(/^#/, '');
+  const sort = document.getElementById('sortSel').value;
+  let list = memos.slice();
+  if (q) list = list.filter(m => m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
+  list.sort((a, b) => (b.pinned - a.pinned) || (sort === 'new' ? b.createdTs - a.createdTs : a.createdTs - b.createdTs));
+
+  // tag filter options
+  const tags = [...new Set(memos.flatMap(m => m.tags))].sort();
+  const sel = document.getElementById('tagFilter');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option ${t===cur?'selected':''}>${t}</option>`).join('');
+  const tf = sel.value;
+  if (tf) list = list.filter(m => m.tags.includes(tf));
+
+  document.getElementById('count').textContent = memos.length ? `共 ${memos.length} 条 memo` + (q||tf ? ' · 筛选出 ' + list.length + ' 条' : '') : '';
+
+  const box = document.getElementById('list');
+  if (!list.length) { box.innerHTML = '<div class="empty">还没有记录，写下第一条吧 ✍️</div>'; return; }
+  box.innerHTML = list.map(m => {
+    if (m.id === editingId) {
+      return `<div class="memo"><textarea class="editbox">${m.content.replace(/</g,'&lt;')}</textarea>
+        <div class="actions"><span onclick="saveEdit('${m.id}')">💾 保存</span><span onclick="editingId=null;render()">取消</span></div></div>`;
+    }
+    return `<div class="memo ${m.pinned?'pinned':''}">
+      <div class="meta">
+        <span>${m.pinned ? '<span class="pin-flag">📌 置顶</span> · ' : ''}${fmt(m.createdTs)}</span>
+        <span>${m.updatedTs > m.createdTs ? '已编辑' : ''}</span>
+      </div>
+      <div class="content">${esc(m.content)}</div>
+      <div class="actions">
+        <span onclick="togglePin('${m.id}')">${m.pinned ? '取消置顶' : '置顶'}</span>
+        <span onclick="startEdit('${m.id}')">编辑</span>
+        <span onclick="del('${m.id}')">删除</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// auto-login check: try fetching memos on load
+(async () => { try { const d = await api('/api/memos'); memos = d.memos; init2(); } catch(e) {} })();
+function init2() { document.getElementById('login').style.display='none'; document.getElementById('app').style.display='block'; render(); }
+</script>
+</body>
+</html>
