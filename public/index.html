@@ -101,6 +101,7 @@
     header .logo { font-size: 16px; }
     header button { font-size: 12px; padding: 4px 7px; }
     header .who { font-size: 12px; max-width: 64px; }
+    #exportBtn { display: none; } /* 小屏空间有限，导出在电脑端使用 */
   }
 </style>
 </head>
@@ -121,7 +122,7 @@
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="who" id="who"></span>
         <button id="usersBtn" style="display:none" onclick="openUsers()">👥 成员</button>
-        <button onclick="window.open('/api/memos/export')">⬇️ 导出</button>
+        <button id="exportBtn" onclick="window.open('/api/memos/export')">⬇️ 导出</button>
         <button onclick="doLogout()">退出</button>
       </div>
     </header>
