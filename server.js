@@ -10,9 +10,13 @@
  */
 
 const http = require('node:http');
+const dns = require('node:dns');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+
+// 部分沙箱环境 IPv6 解析优先但出口不支持 IPv6，强制 IPv4 优先
+try { dns.setDefaultResultOrder('ipv4first'); } catch {}
 
 // ---------------------------------------------------------------- .env（零依赖加载，不覆盖已有环境变量）
 (function loadEnv() {
@@ -62,7 +66,8 @@ if (!API_KEY) {
 }
 
 // ---------------------------------------------------------------- PostgREST 客户端
-async function rest(pathAndQuery, { method = 'GET', body, prefer } = {}) {
+// fetch 失败时自动重试一次，并把底层错误码带出来方便诊断
+async function rest(pathAndQuery, { method = 'GET', body, prefer } = {}, attempt = 0) {
   const url = `${REST_BASE}/${pathAndQuery}`;
   const headers = {
     Authorization: `Bearer ${API_KEY}`,
@@ -71,11 +76,24 @@ async function rest(pathAndQuery, { method = 'GET', body, prefer } = {}) {
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (prefer) headers.Prefer = prefer;
 
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    if (attempt < 2) {
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      return rest(pathAndQuery, { method, body, prefer }, attempt + 1);
+    }
+    const cause = err && err.cause;
+    const code = cause && (cause.code || cause.message);
+    const e = new Error(`PostgREST fetch failed${code ? ` (${code})` : ''}`);
+    e.detail = `${err.message}${code ? ` cause=${code}` : ''}`;
+    throw e;
+  }
   const text = await res.text();
   let data = null;
   if (text) {
@@ -359,7 +377,7 @@ const server = http.createServer(async (req, res) => {
     return res.writeHead(405).end('method not allowed');
   } catch (err) {
     console.error('[error]', req.method, req.url, err && err.message);
-    if (!res.headersSent) sendJson(res, 500, { error: 'internal_error', detail: String(err && err.message) });
+    if (!res.headersSent) sendJson(res, 500, { error: 'internal_error', detail: String(err && err.detail || err && err.message) });
     else res.end();
   }
 });
