@@ -98,6 +98,35 @@
   .count { color: var(--muted); font-size: 12px; margin: 4px 2px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .count .fresh { font-size: 11px; white-space: nowrap; }
 
+  /* 筛选栏里的星标收藏开关 */
+  .toolbar .chipbtn { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 10px; padding: 8px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .toolbar .chipbtn.on { background: #fff8e1; border-color: #f5c518; color: #a9761a; font-weight: 600; }
+
+  /* 折叠卡片：标题 + 标签 + 正文最多 2 行 */
+  .memo { cursor: pointer; }
+  .memo .title { font-size: 15px; font-weight: 600; line-height: 1.55; margin-bottom: 6px; word-break: break-word; }
+  .memo .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 7px; }
+  .memo .tags:empty { display: none; }
+  .memo .tags .tchip { background: var(--tag-bg); color: var(--tag-text); border-radius: 6px; padding: 1px 8px; font-size: 12px; cursor: pointer; user-select: none; }
+  .memo .tags .tchip.fav { background: #fff6d8; color: #a9761a; }
+  .memo:not(.open) .title,
+  .memo:not(.open) .content { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+  .memo:not(.open) .title { -webkit-line-clamp: 1; }
+  .memo:not(.open) .content { -webkit-line-clamp: 2; }
+  .memo .star { cursor: pointer; font-size: 18px; line-height: 1; color: #c9ccd3; user-select: none; }
+  .memo .star.on { color: #f5b301; }
+  .memo .meta .starbox { display: flex; align-items: center; gap: 8px; }
+  .memo .expand-hint { color: var(--accent); }
+
+  /* 分页器（放在筛选栏下面） */
+  .pager { display: flex; justify-content: center; align-items: center; gap: 6px; margin: 0 0 8px; flex-wrap: wrap; }
+  .pager:empty { display: none; }
+  .pager button { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 9px; padding: 7px 12px; font-size: 13px; cursor: pointer; min-width: 38px; }
+  .pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .pager button.cur { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .pager .pinfo { color: var(--muted); font-size: 13px; padding: 0 2px; }
+
   /* mobile */
   @media (max-width: 480px) {
     .wrap { padding: 12px 10px 70px; }
@@ -158,14 +187,16 @@
     </div>
 
     <div class="toolbar">
-      <input type="search" id="q" placeholder="搜索内容或标签…" oninput="render()">
-      <select id="tagFilter" onchange="render()"><option value="">全部标签</option></select>
-      <select id="sortSel" onchange="render()">
+      <input type="search" id="q" placeholder="搜索内容或标签…" oninput="onFilterChange()">
+      <select id="tagFilter" onchange="onFilterChange()"><option value="">全部标签</option></select>
+      <select id="sortSel" onchange="onFilterChange()">
         <option value="new">最新优先</option>
         <option value="old">最早优先</option>
       </select>
+      <button type="button" id="favBtn" class="chipbtn" onclick="toggleFavFilter()" title="只看打了星的收藏">⭐ 收藏</button>
     </div>
 
+    <div class="pager" id="pager"></div>
     <div class="count"><span id="countText"></span><span class="fresh" id="freshInfo"></span></div>
     <div id="list"></div>
   </div>
@@ -358,6 +389,7 @@ async function post() {
   if (!el.value.trim()) return;
   await api('/api/memos', { method: 'POST', body: JSON.stringify({ content: el.value }) });
   el.value = '';
+  page = 1;
   await loadMemos();
 }
 
@@ -378,6 +410,7 @@ function fmt(ts) {
 
 function filterTag(t) {
   document.getElementById('q').value = t;
+  page = 1;
   render();
 }
 
@@ -466,7 +499,6 @@ function render() {
   const sort = document.getElementById('sortSel').value;
   let list = memos.slice();
   if (q) list = list.filter(m => m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
-  list.sort((a, b) => (b.pinned - a.pinned) || (sort === 'new' ? b.createdTs - a.createdTs : a.createdTs - b.createdTs));
 
   // tag filter options
   const tags = [...new Set(memos.flatMap(m => m.tags))].sort();
@@ -475,31 +507,173 @@ function render() {
   sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option ${t===cur?'selected':''}>${t}</option>`).join('');
   const tf = sel.value;
   if (tf) list = list.filter(m => m.tags.includes(tf));
+  if (favOnly) list = list.filter(isFav);
 
-  document.getElementById('countText').textContent = memos.length ? `共 ${memos.length} 条 memo` + (q||tf ? ' · 筛选出 ' + list.length + ' 条' : '') : '';
+  list.sort((a, b) => (b.pinned - a.pinned) || (sort === 'new' ? b.createdTs - a.createdTs : a.createdTs - b.createdTs));
+
+  // ---- 分页 ----
+  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (page > pages) page = pages;
+  if (page < 1) page = 1;
+  const start = (page - 1) * PAGE_SIZE;
+  const pageList = list.slice(start, start + PAGE_SIZE);
+
+  const total = memos.length;
+  const favCount = memos.filter(isFav).length;
+  let ct = total ? `共 ${total} 条 memo` : '';
+  if (q || tf || favOnly) ct += ` · 筛选出 ${list.length} 条`;
+  if (pages > 1) ct += ` · 第 ${page}/${pages} 页`;
+  if (favCount) ct += ` · ⭐ ${favCount}`;
+  document.getElementById('countText').textContent = ct;
   updateFresh();
 
   const box = document.getElementById('list');
-  if (!list.length) { box.innerHTML = '<div class="empty">还没有记录，写下第一条吧 ✍️</div>'; return; }
-  box.innerHTML = list.map(m => {
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">${favOnly ? '还没有收藏，点 memo 右侧的 ☆ 就能收藏 ⭐' : (q || tf ? '没有匹配的记录' : '还没有记录，写下第一条吧 ✍️')}</div>`;
+    document.getElementById('pager').innerHTML = '';
+    return;
+  }
+  box.innerHTML = pageList.map(m => {
     if (m.id === editingId) {
-      return `<div class="memo"><textarea class="editbox">${m.content.replace(/</g,'&lt;')}</textarea>
+      return `<div class="memo open" onclick="event.stopPropagation()"><textarea class="editbox">${m.content.replace(/</g,'&lt;')}</textarea>
         <div class="actions"><span onclick="saveEdit('${m.id}')">💾 保存</span><span onclick="editingId=null;render()">取消</span></div></div>`;
     }
-    return `<div class="memo ${m.pinned?'pinned':''}">
+    const fav = isFav(m);
+    const open = openIds.has(m.id);
+    const parts = splitMemo(m.content);
+    const titleTxt = plainTitle(parts.title) || parts.title || '（无标题）';
+    const tagChips = (m.tags || []).map(t =>
+      `<span class="tchip ${t === FAV_TAG ? 'fav' : ''}" onclick="event.stopPropagation();filterTag('#${String(t).replace(/'/g,'')}')">${t === FAV_TAG ? '⭐ 收藏' : '#' + String(t).replace(/</g,'&lt;')}</span>`).join('');
+    return `<div class="memo ${m.pinned?'pinned':''} ${open?'open':''}" onclick="onCardClick(event,'${m.id}')">
       <div class="meta">
         <span>${m.pinned ? '<span class="pin-flag">📌 置顶</span> · ' : ''}<span class="who">👤 ${String(m.author||'管理员').replace(/</g,'&lt;')}</span> · ${fmt(m.createdTs)}</span>
-        <span>${m.updatedTs > m.createdTs ? '已编辑' : ''}</span>
+        <span class="starbox">${m.updatedTs > m.createdTs ? '<span style="font-size:11px;color:var(--muted)">已编辑</span>' : ''}<span class="star ${fav?'on':''}" title="${fav?'取消收藏':'收藏'}" onclick="toggleStar(event,'${m.id}')">${fav?'★':'☆'}</span></span>
       </div>
-      <div class="content">${esc(m.content)}</div>
+      <div class="title">${esc(titleTxt)}</div>
+      ${tagChips ? `<div class="tags">${tagChips}</div>` : ''}
+      ${parts.body ? `<div class="content">${esc(parts.body)}</div>` : ''}
       <div class="actions">
+        <span class="expand-hint" onclick="toggleOpen('${m.id}', event)">${open ? '收起 ▴' : '展开 ▾'}</span>
         <span onclick="togglePin('${m.id}')">${m.pinned ? '取消置顶' : '置顶'}</span>
         <span onclick="startEdit('${m.id}')">编辑</span>
         <span onclick="del('${m.id}')">删除</span>
       </div>
     </div>`;
   }).join('');
+
+  renderPager(list.length, pages);
+  requestAnimationFrame(syncExpandHints);
 }
+
+// ---- 折叠 / 展开 ----
+const PAGE_SIZE = 20;
+const FAV_TAG = '收藏';
+let page = 1;
+let favOnly = false;
+const openIds = new Set();
+
+function isFav(m) { return (m.tags || []).indexOf(FAV_TAG) >= 0; }
+
+// 首行当标题，其余当正文
+function splitMemo(content) {
+  const raw = String(content || '').replace(/\r\n?/g, '\n').trim();
+  const i = raw.indexOf('\n');
+  if (i < 0) return { title: raw, body: '' };
+  return { title: raw.slice(0, i).trim(), body: raw.slice(i + 1).trim() };
+}
+
+// 标题只留纯文本：去掉 ** ` #标签
+function plainTitle(s) {
+  return String(s)
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/(^|\s)#[^\s#<>"'`]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function onCardClick(ev, id) {
+  if (ev.target.closest('a, .tag, .tchip, .actions, .star, textarea, button')) return;
+  const card = ev.currentTarget;
+  const hint = card.querySelector('.expand-hint');
+  if (hint && hint.style.display === 'none') return; // 内容本来就没被截断
+  toggleOpen(id);
+}
+
+function toggleOpen(id, ev) {
+  if (ev) ev.stopPropagation();
+  if (openIds.has(id)) openIds.delete(id); else openIds.add(id);
+  render();
+}
+
+// 渲染后判断哪些卡片真的被截断了，没截断的隐藏「展开」
+function syncExpandHints() {
+  document.querySelectorAll('#list .memo').forEach(card => {
+    const hint = card.querySelector('.expand-hint');
+    if (!hint) return;
+    if (card.classList.contains('open')) { hint.style.display = ''; return; }
+    let over = false;
+    card.querySelectorAll('.title, .content').forEach(el => {
+      if (el.scrollHeight > el.clientHeight + 2) over = true;
+    });
+    hint.style.display = over ? '' : 'none';
+  });
+}
+
+// ---- 分页 ----
+function renderPager(total, pages) {
+  const box = document.getElementById('pager');
+  if (pages <= 1) { box.innerHTML = ''; return; }
+  const nums = [];
+  const win = new Set([1, pages, page, page - 1, page + 1, page - 2, page + 2]);
+  [...win].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b).forEach(n => nums.push(n));
+  let html = `<button ${page <= 1 ? 'disabled' : ''} onclick="gotoPage(${page - 1})">‹ 上一页</button>`;
+  let prev = 0;
+  nums.forEach(n => {
+    if (prev && n - prev > 1) html += '<span class="pinfo">…</span>';
+    html += `<button class="${n === page ? 'cur' : ''}" onclick="gotoPage(${n})">${n}</button>`;
+    prev = n;
+  });
+  html += `<button ${page >= pages ? 'disabled' : ''} onclick="gotoPage(${page + 1})">下一页 ›</button>`;
+  box.innerHTML = html;
+}
+
+function gotoPage(p) {
+  page = p;
+  render();
+  const pg = document.getElementById('pager');
+  if (pg) {
+    const top = pg.getBoundingClientRect().top + window.pageYOffset - 60;
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }
+}
+
+function onFilterChange() { page = 1; render(); }
+
+function toggleFavFilter() {
+  favOnly = !favOnly;
+  const b = document.getElementById('favBtn');
+  if (b) b.classList.toggle('on', favOnly);
+  page = 1;
+  render();
+}
+
+async function toggleStar(ev, id) {
+  if (ev) ev.stopPropagation();
+  const m = memos.find(x => x.id === id);
+  if (!m) return;
+  const tags = new Set(m.tags || []);
+  if (tags.has(FAV_TAG)) tags.delete(FAV_TAG); else tags.add(FAV_TAG);
+  try {
+    const d = await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ tags: [...tags] }) });
+    if (d && d.memo) {
+      const i = memos.findIndex(x => x.id === id);
+      if (i >= 0) memos[i] = d.memo;
+    }
+  } catch (e) { return; }
+  render();
+}
+
 
 // boot：URL 带 ?token= 时免密自动登录；否则尝试已有会话
 (async () => {

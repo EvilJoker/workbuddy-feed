@@ -59,6 +59,9 @@ const SESSION_SECRET =
 const COOKIE_NAME = 'wbmemos';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 365; // 1 年：token 链接进入后长期免密
 
+// 星标收藏 = 藏在 tags 里的固定标签，前端 ★ 直接读写这个标签
+const FAV_TAG = '收藏';
+
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 if (!API_KEY) {
@@ -425,7 +428,22 @@ const server = http.createServer(async (req, res) => {
           const content = body.content.trim();
           if (!content) return sendJson(res, 400, { error: 'empty' });
           patch.content = content;
-          patch.tags = parseTags(content);
+          const tags = parseTags(content);
+          // 正文里没写 #收藏 时也要保住星标（否则一编辑就掉星）
+          if (!tags.includes(FAV_TAG)) {
+            const cur = await rest(`${TABLE}?id=eq.${id}&select=tags`);
+            const old = cur && cur[0] && Array.isArray(cur[0].tags) ? cur[0].tags : [];
+            if (old.includes(FAV_TAG)) tags.push(FAV_TAG);
+          }
+          patch.tags = tags;
+        }
+        // 星标收藏：直接覆盖 tags（前端 ★ 走这里）
+        if (Array.isArray(body.tags)) {
+          const clean = body.tags
+            .filter((t) => typeof t === 'string')
+            .map((t) => t.trim().replace(/^#+/, '').replace(/\s+/g, '').slice(0, 40))
+            .filter(Boolean);
+          patch.tags = [...new Set(clean)].slice(0, 30);
         }
         if (typeof body.pinned === 'boolean') patch.pinned = body.pinned;
         if (!Object.keys(patch).length) return sendJson(res, 400, { error: 'nothing_to_update' });
