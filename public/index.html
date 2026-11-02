@@ -102,9 +102,11 @@
   @media (max-width: 480px) {
     .wrap { padding: 12px 10px 70px; }
     .memo .content { font-size: 15px; }
-    header { gap: 6px; }
+    header { gap: 4px; }
     header .logo { font-size: 16px; }
+    header .brand-long { display: none; } /* 小屏收成「📒 Feed」，给刷新/成员按钮腾位置 */
     header button { font-size: 12px; padding: 4px 7px; }
+    header button.iconbtn { padding: 4px 6px; }
     header .who { font-size: 12px; max-width: 64px; }
     #exportBtn { display: none; } /* 小屏空间有限，导出在电脑端使用 */
   }
@@ -123,7 +125,7 @@
 <div id="app" style="display:none">
   <div class="wrap">
     <header>
-      <div class="logo">📒 WorkBuddy <span>Feed</span></div>
+      <div class="logo">📒 <span class="brand-long">WorkBuddy </span><span>Feed</span></div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="who" id="who"></span>
         <button id="refreshBtn" class="iconbtn" onclick="manualRefresh()" title="刷新（每 60 秒自动刷新）">🔄</button>
