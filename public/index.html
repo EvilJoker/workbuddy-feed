@@ -28,6 +28,10 @@
   header > div:last-child { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   header button { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
   header .who { color: var(--text); font-size: 13px; white-space: nowrap; max-width: 88px; overflow: hidden; text-overflow: ellipsis; }
+  /* 刷新按钮 */
+  header button.iconbtn { padding: 5px 8px; font-size: 14px; line-height: 1.2; }
+  header button.iconbtn.spin { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* composer */
   .composer { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
@@ -91,7 +95,8 @@
   .memo .actions span:hover { color: var(--accent); }
   .memo textarea.editbox { width: 100%; min-height: 80px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 14px; line-height: 1.6; font-family: inherit; }
   .empty { text-align: center; color: var(--muted); padding: 60px 0; font-size: 14px; }
-  .count { color: var(--muted); font-size: 12px; margin: 4px 2px 12px; }
+  .count { color: var(--muted); font-size: 12px; margin: 4px 2px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .count .fresh { font-size: 11px; white-space: nowrap; }
 
   /* mobile */
   @media (max-width: 480px) {
@@ -121,6 +126,7 @@
       <div class="logo">📒 WorkBuddy <span>Feed</span></div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="who" id="who"></span>
+        <button id="refreshBtn" class="iconbtn" onclick="manualRefresh()" title="刷新（每 60 秒自动刷新）">🔄</button>
         <button id="usersBtn" style="display:none" onclick="openUsers()">👥 成员</button>
         <button id="exportBtn" onclick="window.open('/api/memos/export')">⬇️ 导出</button>
         <button onclick="doLogout()">退出</button>
@@ -158,7 +164,7 @@
       </select>
     </div>
 
-    <div class="count" id="count"></div>
+    <div class="count"><span id="countText"></span><span class="fresh" id="freshInfo"></span></div>
     <div id="list"></div>
   </div>
 </div>
@@ -207,14 +213,91 @@ async function init() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   await loadMe();
-  const d = await api('/api/memos');
-  memos = d.memos;
-  render();
+  await loadMemos();
+  startAutoRefresh();
 }
 
 function showLogin() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'block';
+}
+
+// ---- 刷新：手动（🔄）+ 每 60 秒自动 ----
+const REFRESH_INTERVAL = 60000;
+let lastRefresh = 0;
+let autoTimer = null;
+let refreshing = false;
+
+// 用来判断数据有没有变（避免无变化时重绘、打断滚动/选中）
+function snapshot() {
+  return memos.map(m => `${m.id}:${m.updatedTs}:${m.pinned ? 1 : 0}`).join('|');
+}
+
+async function loadMemos() {
+  const d = await api('/api/memos');
+  memos = d.memos;
+  lastRefresh = Date.now();
+  render();
+}
+
+function updateFresh(msg) {
+  const el = document.getElementById('freshInfo');
+  if (!el) return;
+  if (msg) {
+    el.textContent = msg;
+    clearTimeout(updateFresh._t);
+    updateFresh._t = setTimeout(() => updateFresh(), 2500);
+    return;
+  }
+  if (!lastRefresh) { el.textContent = ''; return; }
+  const d = new Date(lastRefresh);
+  const pad = n => String(n).padStart(2, '0');
+  el.textContent = `自动刷新 ${REFRESH_INTERVAL / 1000}s · ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+async function refreshMemos(manual) {
+  if (refreshing) return;
+  // 未登录 / 编辑中（自动刷新时不打断）/ 页面在后台（自动刷新时跳过）
+  if (document.getElementById('app').style.display === 'none') return;
+  if (!manual && editingId !== null) return;
+  if (!manual && document.visibilityState === 'hidden') return;
+
+  refreshing = true;
+  const btn = document.getElementById('refreshBtn');
+  if (btn) btn.classList.add('spin');
+  const before = snapshot();
+  let err = '';
+  try {
+    const d = await api('/api/memos');
+    memos = d.memos;
+    lastRefresh = Date.now();
+    if (snapshot() !== before) { render(); } else { updateFresh(); }
+  } catch (e) {
+    err = '刷新失败，稍后重试';
+    updateFresh(err);
+  } finally {
+    refreshing = false;
+    if (btn) setTimeout(() => btn.classList.remove('spin'), 400);
+    if (manual && !err) updateFresh(snapshot() === before ? '已是最新' : '');
+  }
+}
+
+function manualRefresh() { refreshMemos(true); }
+
+function startAutoRefresh() {
+  if (autoTimer) clearInterval(autoTimer);
+  autoTimer = setInterval(() => refreshMemos(false), REFRESH_INTERVAL);
+  // 从后台切回前台时立刻补一次（不等到下一个 60s）
+  if (!startAutoRefresh._bound) {
+    startAutoRefresh._bound = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshMemos(false);
+    });
+    window.addEventListener('focus', () => {
+      if (Date.now() - lastRefresh > REFRESH_INTERVAL) refreshMemos(false);
+    });
+  }
+  updateFresh();
 }
 
 // ---- 成员管理（仅管理员） ----
@@ -273,7 +356,7 @@ async function post() {
   if (!el.value.trim()) return;
   await api('/api/memos', { method: 'POST', body: JSON.stringify({ content: el.value }) });
   el.value = '';
-  const d = await api('/api/memos'); memos = d.memos; render();
+  await loadMemos();
 }
 
 function esc(s) {
@@ -361,19 +444,19 @@ async function saveEdit(id) {
   const ta = document.querySelector('.editbox');
   await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ content: ta.value }) });
   editingId = null;
-  const d = await api('/api/memos'); memos = d.memos; render();
+  await loadMemos();
 }
 
 async function togglePin(id) {
   const m = memos.find(x => x.id === id);
   await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ pinned: !m.pinned }) });
-  const d = await api('/api/memos'); memos = d.memos; render();
+  await loadMemos();
 }
 
 async function del(id) {
   if (!confirm('确定删除这条 memo？')) return;
   await api('/api/memos/' + id, { method: 'DELETE' });
-  const d = await api('/api/memos'); memos = d.memos; render();
+  await loadMemos();
 }
 
 function render() {
@@ -391,7 +474,8 @@ function render() {
   const tf = sel.value;
   if (tf) list = list.filter(m => m.tags.includes(tf));
 
-  document.getElementById('count').textContent = memos.length ? `共 ${memos.length} 条 memo` + (q||tf ? ' · 筛选出 ' + list.length + ' 条' : '') : '';
+  document.getElementById('countText').textContent = memos.length ? `共 ${memos.length} 条 memo` + (q||tf ? ' · 筛选出 ' + list.length + ' 条' : '') : '';
+  updateFresh();
 
   const box = document.getElementById('list');
   if (!list.length) { box.innerHTML = '<div class="empty">还没有记录，写下第一条吧 ✍️</div>'; return; }
