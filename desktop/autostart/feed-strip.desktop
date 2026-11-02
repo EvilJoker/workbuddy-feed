@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Feed 侧边条
+Comment=登录后自动在屏幕右边缘打开 WorkBuddy Feed 窄窗
+Exec=/home/10312862@zte.intra/.local/bin/feed-strip.sh show
+Icon=accessories-text-editor
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

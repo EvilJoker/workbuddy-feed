@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Feed 侧边条热键
+Comment=登录后向 nde-globalkeysd 注册 Alt+M 展开/隐藏 WorkBuddy Feed 侧边条
+Exec=/home/10312862@zte.intra/.local/bin/feed-hotkey-nde.sh
+Icon=preferences-desktop-keyboard-shortcuts
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
