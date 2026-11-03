@@ -1,118 +1,112 @@
-# My Memos · CloudBase 版后端
+# 📒 WorkBuddy Feed
 
-个人 memo 服务的**服务端改造版**：数据层从"自建 SQL / 本地文件"换成 **腾讯云 CloudBase PostgreSQL**，
-通过 CloudBase 的 PostgREST HTTP 接口读写。前端一行没改，接口契约与线上完全一致。
+> 一个为个人与小团队打造的轻量级信息流 + 待办看板。发 memo、打标签、星标收藏、管理 ToDo —— 全部装进一个零依赖的 Node 服务里。
 
-- 线上原版：`https://a52908d90661c0f0c.app.workbuddy.host/?sharecode=...`
-- 数据库：CloudBase 环境 `sqyworkbuddybase-d6exnh2af5c8aef` / 库 `postgres-nbuh23sa` / 表 `public.memos`
+<div align="center">
 
-## 为什么走 HTTP API 而不是直连 PG
+![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen) ![Deps](https://img.shields.io/badge/dependencies-0-blue) ![DB](https://img.shields.io/badge/storage-PostgreSQL-informational) ![License](https://img.shields.io/badge/license-MIT-orange)
 
-CloudBase 的 PG 实例只有 VPC 内网地址（`30.251.13.89:50213`），云沙箱/公网服务连不上。
-官方给的对外通道是 PostgREST：
+**Feed 信息流** · **ToDo 看板** · **标签 & 收藏** · **成员体系** · **60s 自动刷新** · **移动端适配**
+
+</div>
+
+---
+
+## ✨ 它是什么
+
+WorkBuddy Feed 把「随手记」和「待办管理」放进同一个界面：
+
+- 📒 **Feed 视图** —— 像 memos 一样随时记录，首行自动成为标题
+- ✅ **ToDo 视图** —— 点一下左上角 Logo 即可切换，条目带五种状态：`新建` `进行中` `已完成` `废弃` `过期`
+- 🏷️ **标签** —— 正文里写 `#标签` 即自动解析，可筛选、可搜索
+- ⭐ **收藏** —— 打个星就是收藏，筛选栏一键「只看收藏」
+- 🙋 **成员体系** —— 管理员创建成员，免密 token 链接直接进入，消息带作者署名
+- 🔄 **自动刷新** —— 每 60 秒静默刷新，手动刷新按钮随时可用；折叠状态不丢失
+- 📄 **分页 + 折叠卡片** —— 每页 20 条；卡片默认折叠（标题 + 标签 + 正文两行），点击展开
+- 📱 **移动端适配** —— 390px 视口无横向溢出，手机浏览器直接用
+
+| Feed 视图 | ToDo 视图 |
+| --- | --- |
+| ![Feed](docs/screenshots/feed-desktop.jpg) | ![ToDo](docs/screenshots/todo-desktop.jpg) |
+
+<div align="center"><img src="docs/screenshots/feed-mobile.jpg" width="300" alt="移动端" /></div>
+
+## 🏗️ 架构
 
 ```
-https://<envId>.api.tcloudbasegateway.com/v1/rdb/rest/<表名>
-Authorization: Bearer <API Key>
+浏览器 ──> server.js（零依赖，node:http）
+              │
+              ├── 静态文件 public/index.html（单文件前端，原生 JS）
+              │
+              └── HTTPS ──> 腾讯云 CloudBase 数据库网关（PostgREST）
+                               public.memos / public.todos / public.users
 ```
 
-所以本服务端**只持有 API Key、不持有数据库密码**，也不在本地留任何 SQLite/JSON 数据文件。
+- **后端只有一个文件** `server.js`（零 npm 依赖，`node >= 18`）
+- **数据全部在云端 PostgreSQL**（腾讯云 CloudBase），通过官方 PostgREST 网关读写，本地不留任何数据文件
+- **认证**：密码登录 + 无状态 HMAC 签名 cookie；`GET /api/auth?token=xxx` 支持免密登录链接
+- **会话**：服务端只持有 API Key，不持有数据库密码
 
-> ⚠️ 用的 Key 是 `web-server`（`service_role`，绕过 RLS，等同超级权限）。
-> **只能放在服务端环境变量里**，绝不能出现在前端代码、Git 仓库或截图里。
+> 为什么不直连 PG？CloudBase 的 PG 实例只有 VPC 内网地址，公网服务的官方出口就是它的 HTTP 数据网关（PostgREST）。这套设计让服务可以部署在任何能出公网的地方。
 
-## 目录
+## 🚀 快速开始
 
-```
-memos-cloud/
-├── server.js          # 全部后端逻辑（零依赖，node >= 18）
-├── public/index.html  # 前端（与线上版本一致）
-├── sql/schema.sql     # 建表 / 索引 / updated_at 触发器
-├── scripts/import.js  # 旧数据导入（保留原始时间戳）
-├── .env.example       # 环境变量模板
-└── package.json
-```
+### 1. 准备数据库
 
-## 部署
-
-### 1. 准备数据库（只需一次，已在本机执行过）
-
-```bash
-export PATH=~/.workbuddy/binaries/node/versions/22.22.2/bin:$HOME/.workbuddy/binaries/node/cli-connector-packages/bin:$PATH
-export TCB_CLI_SOURCE=workbuddy
-tcb db execute -e sqyworkbuddybase-d6exnh2af5c8aef --sql "$(cat sql/schema.sql)"
-```
-
-表结构：
-
-| 列 | 类型 | 说明 |
-| --- | --- | --- |
-| id | uuid PK | `gen_random_uuid()` |
-| content | text | 正文（含 `#标签`） |
-| tags | text[] | 写入时由服务端从正文解析 |
-| pinned | boolean | 置顶 |
-| created_at | timestamptz | 创建时间 |
-| updated_at | timestamptz | 修改时间（触发器自动刷新） |
-
-索引：`created_at desc`、`(pinned desc, created_at desc)`、`tags` 的 GIN。
+在腾讯云 [CloudBase](https://tcb.cloud.tencent.com/) 开通 PostgreSQL 数据库，然后执行 [`sql/schema.sql`](sql/schema.sql) 建表（`memos` / `todos` / `users` 三张表 + 索引 + 触发器）。
 
 ### 2. 配置并启动
 
 ```bash
-cp .env.example .env
-# 填 CLOUDBASE_API_KEY（真值在 ~/.config/cloudbase/web-server.apikey）
-node server.js        # 默认 8080
+git clone https://github.com/EvilJoker/workbuddy-feed.git
+cd workbuddy-feed
+
+cp .env.example .env      # 填入 CLOUDBASE_ENV_ID / CLOUDBASE_API_KEY / ACCESS_PASSWORD
+npm start                 # 默认监听 8080
 ```
 
-环境变量：
+`.env` 说明见 [`.env.example`](.env.example)，每一项都有注释。
 
-| 变量 | 必填 | 说明 |
-| --- | --- | --- |
-| `CLOUDBASE_API_KEY` | ✅ | service_role key，仅服务端 |
-| `CLOUDBASE_ENV_ID` | ✅ | 默认 `sqyworkbuddybase-d6exnh2af5c8aef` |
-| `CLOUDBASE_REST_BASE` | | 默认由 envId 推导，一般不用填 |
-| `ACCESS_PASSWORD` | | 页面访问密码，默认 `memos2026` |
-| `SESSION_SECRET` | | cookie 签名密钥；不填则从密码派生（换密码=全员掉线） |
-| `MEMOS_TABLE` | | 默认 `memos` |
-| `PORT` | | 默认 8080 |
+### 3. 使用
 
-### 3. 发布到 WorkBuddy site
+浏览器打开 `http://localhost:8080`，输入访问密码即可。
 
-把本项目（`server.js` + `public/` + `.env`）作为 Node 应用发布即可，
-启动命令 `node server.js`，健康检查 `GET /api/health`。
-部署环境必须能访问 `https://<envId>.api.tcloudbasegateway.com`（公网 HTTPS）。
+- 首位使用者即管理员，右上角「成员」里可以创建成员并复制免密登录链接
+- 写 `#标签` 自动归类；点卡片右上角 ☆ 收藏；点左上角 Logo 切换 Feed / ToDo
 
-## 接口（与旧版一致）
+## 🔌 API 一览
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/login` | `{password}` → 校验通过下发 HttpOnly cookie |
-| POST | `/api/logout` | 清 cookie |
-| GET | `/api/memos` | `{memos:[{id,content,tags,pinned,createdTs,updatedTs}]}` |
-| POST | `/api/memos` | `{content}` → 新建（自动解析 `#标签`） |
-| PATCH | `/api/memos/:id` | `{content?}` / `{pinned?}` |
-| DELETE | `/api/memos/:id` | 删除 |
-| GET | `/api/memos/export` | 下载 JSON 全量备份 |
-| GET | `/api/health` | 免登录存活探测 |
+| GET | `/api/health` | 健康检查 |
+| POST | `/api/login` | 密码登录，签发 cookie |
+| GET | `/api/auth?token=` | 成员免密登录 |
+| GET | `/api/me` | 当前身份 |
+| GET/POST | `/api/memos` | 列表 / 发布（自动解析 `#标签`） |
+| PATCH/DELETE | `/api/memos/:id` | 编辑（重解析标签、保留收藏）/ 删除 / 置顶 / 改标签 |
+| GET | `/api/memos/export` | 导出 JSON |
+| GET/POST | `/api/todos` | ToDo 列表 / 新增（可带 `status`） |
+| PATCH/DELETE | `/api/todos/:id` | 改状态 / 编辑 / 删除 |
+| GET/POST | `/api/users` | 成员管理（仅管理员） |
 
-会话是**无状态 HMAC cookie**（30 天），服务重启不掉线，也不需要 Redis。
+## 📁 目录结构
 
-## 旧数据迁移
-
-```bash
-# 旧服务导出：浏览器打开 /api/memos/export，或 curl
-node scripts/import.js ./memos-2026-11-01.json --dry-run   # 先看前 3 条
-node scripts/import.js ./memos-2026-11-01.json             # 真正写入
+```
+workbuddy-feed/
+├── server.js            # 全部后端逻辑（零依赖）
+├── public/index.html    # 单文件前端（原生 JS，无构建）
+├── sql/schema.sql       # 建表 / 索引 / updated_at 触发器
+├── scripts/import.js    # 从旧服务 JSON 导入历史数据
+├── .env.example         # 环境变量模板
+└── docs/screenshots/    # 截图
 ```
 
-时间戳会按原始 `createdTs/updatedTs` 保留，导入后顺序不变。
+## 🛡️ 安全提示
 
-## 排查
+- `CLOUDBASE_API_KEY` 是 `service_role` 级别的 Key，**只放在服务端环境变量**，绝不要提交进仓库或写进前端
+- 访问密码 `ACCESS_PASSWORD` 是唯一入口，请使用强密码；成员免密 token 请当作密码保管
+- 更换 `SESSION_SECRET`（或密码）会使所有人的登录状态失效
 
-| 现象 | 原因 / 处理 |
-| --- | --- |
-| 启动报 `缺少 CLOUDBASE_API_KEY` | `.env` 没填或没读到 |
-| 接口 500 且日志有 `PostgREST ... 404` | 表不存在 / 表名不对，重跑 `sql/schema.sql` |
-| 接口 500 且 `401` / `JWSError` | API Key 失效或不是该环境的 key |
-| 页面一直停在登录框 | 密码不对，或 cookie 被浏览器拦（跨站时设 `COOKIE_SECURE=1` 走 https） |
-| 打开是 JSON 不是页面 | 上次那个 bug 的老问题：检查是否还残留「把 HTML 序列化成 JSON」的响应逻辑，本版静态文件用 `fs.readFile` + `text/html` 直出 |
+## 📜 License
+
+[MIT](LICENSE)

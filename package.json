@@ -1,12 +1,14 @@
 {
-  "name": "memos-cloud",
-  "version": "1.0.0",
-  "private": true,
-  "description": "My Memos - 个人 memo 服务，数据存 CloudBase PostgreSQL (PostgREST)",
+  "name": "workbuddy-feed",
+  "version": "1.1.0",
+  "description": "WorkBuddy Feed - 轻量级团队信息流 + ToDo 看板，零依赖 Node 服务，数据存 CloudBase PostgreSQL (PostgREST)",
   "main": "server.js",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "PORT=8080 node server.js"
-  }
+  },
+  "license": "MIT"
 }
