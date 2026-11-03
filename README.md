@@ -1,18 +1,78 @@
 # 📒 WorkBuddy Feed
 
-> 一个为个人与小团队打造的轻量级信息流 + 待办看板。发 memo、打标签、星标收藏、管理 ToDo —— 全部装进一个零依赖的 Node 服务里。
+> **Agent 干完了活，你却不知道？** 让 AI 把日报、行情、待办主动推进一个你随时能看的地方 —— 一个信息流 + 待办看板，零依赖、零服务器成本。
 
 <div align="center">
 
-![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen) ![Deps](https://img.shields.io/badge/dependencies-0-blue) ![DB](https://img.shields.io/badge/storage-PostgreSQL-informational) ![License](https://img.shields.io/badge/license-MIT-orange)
+![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen) ![Deps](https://img.shields.io/badge/dependencies-0-blue) ![Server](https://img.shields.io/badge/servers-0%20(免费托管)-success) ![DB](https://img.shields.io/badge/storage-PostgreSQL-informational) ![License](https://img.shields.io/badge/license-MIT-orange)
 
-**Feed 信息流** · **ToDo 看板** · **标签 & 收藏** · **成员体系** · **60s 自动刷新** · **移动端适配**
+**Agent 主动推送** · **Feed 信息流** · **ToDo 看板** · **标签 & 收藏** · **成员体系** · **移动端适配**
 
 </div>
 
 ---
 
-## ✨ 它是什么
+## 🎯 解决什么问题
+
+Agent 越用越多，但协作界面还停在「对话窗口」：
+
+- **Agent 干完了什么，我不知道** —— 昨天的日报、跑完的分析、改完的代码，都沉在某个会话里，翻不到
+- **新事件、新任务得靠我主动去看** —— 邮件、行情、待办全靠人盯，关掉对话就断了
+- **结果散落各处** —— 一个会话一个窗口，没有一个统一收件箱
+
+WorkBuddy Feed 就是给 Agent 用的**收件箱 + 布告栏**：Agent 干完活往里推一条，你打开就能看到；需要跟进的事推成一条 ToDo，状态一路跟到完成。
+
+## 🤖 Agent 主动推送
+
+Agent 只需要一个 HTTP 请求，就能把结果推到你的信息流里：
+
+```bash
+# 1) 用成员免密 token 换会话 cookie
+curl -s "https://<your-app>/api/auth?token=<MEMBER_TOKEN>" -c /tmp/c.txt
+
+# 2) 推一条日报到 Feed
+curl -s -b /tmp/c.txt -X POST "https://<your-app>/api/memos" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"📊 今日工作日报 #日报\n\n- 完成：Feed 支持 ToDo 视图\n- 风险：CNB token 已过期"}'
+
+# 3) 或者直接建一条待办（status: new / doing / done / dropped / expired）
+curl -s -b /tmp/c.txt -X POST "https://<your-app>/api/todos" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"跟进社区 PR #社区","status":"new"}'
+```
+
+配上任意定时能力（WorkBuddy 自动化任务、cron、CI），就是一条完整的「Agent 主动汇报」链路：
+
+```
+定时触发 ──> Agent 执行（查邮件 / 拉行情 / 跑分析 / 写日报）
+                 │
+                 └──> POST /api/memos 或 /api/todos
+                           │
+                           └──> 打开 Feed 就能看到（60s 自动刷新，手机随时看）
+```
+
+**典型场景**
+
+| 场景 | Agent 每天干什么 | 落到哪 |
+| --- | --- | --- |
+| 📝 工作日报 | 凌晨汇总前一天的进展与卡点，生成一段日报 | Feed `#日报` |
+| 📧 邮件日报 | 扫一遍收件箱，按紧急/重要聚类，提取行动项 | Feed `#邮件` |
+| 📈 股市信息 | 收盘后拉行情与持仓变动，生成简报 | Feed `#行情` |
+| ✅ 任务同步 | 日报里识别出的「待跟进事项」直接建 ToDo | ToDo（新建 → 进行中 → 已完成） |
+
+> 一个信息流解决了 Agent 协作里最难的部分：**结果有人看、状态有人跟**。
+
+## 🪶 极简 & 零成本
+
+- **0 台服务器要买** —— 服务就是一个单文件 Node 进程，跑在 WorkBuddy 免费的应用托管上
+- **0 个 npm 依赖** —— `node:http` + 内置 `fetch`，克隆下来就能跑，不需要 `npm install`
+- **0 构建步骤** —— 前端是 20KB 单文件 HTML + 原生 JS，改完刷新即生效
+- **数据库用免费额度** —— CloudBase PG 体验版足够个人与小团队长期使用；服务端只持有 API Key，本地不留任何数据文件
+- **一份数据，多个入口** —— 浏览器、手机、Agent 走同一套 REST API
+
+> 整套东西：**1 个 JS 文件 + 1 个 HTML + 3 张表**。
+
+## ✨ 功能一览
 
 WorkBuddy Feed 把「随手记」和「待办管理」放进同一个界面：
 
@@ -34,13 +94,15 @@ WorkBuddy Feed 把「随手记」和「待办管理」放进同一个界面：
 ## 🏗️ 架构
 
 ```
-浏览器 ──> server.js（零依赖，node:http）
-              │
-              ├── 静态文件 public/index.html（单文件前端，原生 JS）
-              │
-              └── HTTPS ──> 腾讯云 CloudBase 数据库网关（PostgREST）
-                               public.memos / public.todos / public.users
+  浏览器 / 手机 ──┐
+                  ├──> server.js（单文件，零依赖）
+  Agent / 定时任务 ┘        │
+                            ├── 静态资源：public/index.html（20KB，原生 JS）
+                            └── 数据：HTTPS ──> CloudBase PostgREST
+                                               public.memos / todos / users
 ```
+
+人和 Agent 走的是同一套 REST API —— 人点按钮、Agent 发请求，写进同一份数据。
 
 - **后端只有一个文件** `server.js`（零 npm 依赖，`node >= 18`）
 - **数据全部在云端 PostgreSQL**（腾讯云 CloudBase），通过官方 PostgREST 网关读写，本地不留任何数据文件
@@ -73,6 +135,12 @@ npm start                 # 默认监听 8080
 
 - 首位使用者即管理员，右上角「成员」里可以创建成员并复制免密登录链接
 - 写 `#标签` 自动归类；点卡片右上角 ☆ 收藏；点左上角 Logo 切换 Feed / ToDo
+
+### 4. 让 Agent 开始推送
+
+1. 在「成员」里为 Agent 建一个成员，拿到免密 token
+2. 照 [「Agent 主动推送」](#-agent-主动推送) 里的 curl 发一次，确认 Feed 里能看到
+3. 把这条请求挂到定时任务上（WorkBuddy 自动化 / cron / CI）—— 之后每天凌晨，日报、邮件摘要、行情简报都会自己出现在 Feed 里
 
 ## 🔌 API 一览
 
