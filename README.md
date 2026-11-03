@@ -24,21 +24,35 @@ WorkBuddy Feed 就是给 Agent 用的**收件箱 + 布告栏**：Agent 干完活
 
 ## 🤖 Agent 主动推送
 
-Agent 只需要一个 HTTP 请求，就能把结果推到你的信息流里：
+仓库自带一个零依赖推送脚本 `scripts/push.js`，Agent 干完活一行命令就能汇报：
 
 ```bash
-# 1) 用成员免密 token 换会话 cookie
-curl -s "https://<your-app>/api/auth?token=<MEMBER_TOKEN>" -c /tmp/c.txt
+# 推一条日报到 Feed（FEED_TOKEN = 「成员」里创建的免密 token）
+FEED_BASE=https://your-app.example.com FEED_TOKEN=xxx \
+  node scripts/push.js --content "📊 今日工作日报 #日报
+- 完成：Feed 支持 ToDo 视图
+- 风险：CNB token 已过期"
 
-# 2) 推一条日报到 Feed
+# 推一条待办（status: new / doing / done / dropped / expired）
+FEED_BASE=https://your-app.example.com FEED_TOKEN=xxx \
+  node scripts/push.js --type todo --status doing --content "跟进社区 PR #社区"
+
+# 也可以直接喂文件或管道（适合日报/长文）
+node scripts/push.js --file report.md
+cat report.md | node scripts/push.js --stdin
+```
+
+> 用 WorkBuddy 应用托管时，网关要求每个请求都带分享码，加一个 `FEED_SHARECODE=<分享码>` 即可。
+
+不想用脚本？它就是两个 HTTP 请求，任何语言都能接：
+
+```bash
+# 1) token 换会话 cookie
+curl -s "https://<your-app>/api/auth?token=<MEMBER_TOKEN>" -c /tmp/c.txt -b /tmp/c.txt
+
+# 2) 写入
 curl -s -b /tmp/c.txt -X POST "https://<your-app>/api/memos" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"📊 今日工作日报 #日报\n\n- 完成：Feed 支持 ToDo 视图\n- 风险：CNB token 已过期"}'
-
-# 3) 或者直接建一条待办（status: new / doing / done / dropped / expired）
-curl -s -b /tmp/c.txt -X POST "https://<your-app>/api/todos" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"跟进社区 PR #社区","status":"new"}'
+  -H 'Content-Type: application/json' -d '{"content":"📊 今日日报 #日报"}'
 ```
 
 配上任意定时能力（WorkBuddy 自动化任务、cron、CI），就是一条完整的「Agent 主动汇报」链路：
@@ -46,7 +60,7 @@ curl -s -b /tmp/c.txt -X POST "https://<your-app>/api/todos" \
 ```
 定时触发 ──> Agent 执行（查邮件 / 拉行情 / 跑分析 / 写日报）
                  │
-                 └──> POST /api/memos 或 /api/todos
+                 └──> scripts/push.js（或 POST /api/memos、/api/todos）
                            │
                            └──> 打开 Feed 就能看到（60s 自动刷新，手机随时看）
 ```
@@ -164,6 +178,7 @@ workbuddy-feed/
 ├── server.js            # 全部后端逻辑（零依赖）
 ├── public/index.html    # 单文件前端（原生 JS，无构建）
 ├── sql/schema.sql       # 建表 / 索引 / updated_at 触发器
+├── scripts/push.js      # Agent 推送脚本（零依赖，支持 Feed / ToDo）
 ├── scripts/import.js    # 从旧服务 JSON 导入历史数据
 ├── .env.example         # 环境变量模板
 └── docs/screenshots/    # 截图

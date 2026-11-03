@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "PORT=8080 node server.js"
+    "dev": "PORT=8080 node server.js",
+    "push": "node scripts/push.js"
   },
   "license": "MIT"
 }
