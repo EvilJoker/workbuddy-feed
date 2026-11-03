@@ -1,15 +1,17 @@
 {
   "name": "workbuddy-feed",
-  "version": "1.1.0",
-  "description": "WorkBuddy Feed - 轻量级团队信息流 + ToDo 看板，零依赖 Node 服务，数据存 CloudBase PostgreSQL (PostgREST)",
+  "version": "1.2.0",
+  "description": "WorkBuddy Feed - 轻量级团队信息流 + ToDo 看板，零依赖 Node 服务，数据存本地 SQLite 单文件",
   "main": "server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "PORT=8080 node server.js",
-    "push": "node scripts/push.js"
+    "dev": "node server.js",
+    "push": "node scripts/push.js",
+    "test": "python3 scripts/smoke.py",
+    "backup": "node scripts/backup.js"
   },
   "license": "MIT"
 }

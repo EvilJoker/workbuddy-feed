@@ -1,12 +1,12 @@
 'use strict';
 /**
- * My Memos — 后端服务（CloudBase PostgreSQL / PostgREST 版）
+ * My Memos — 后端服务（本地 SQLite 版）
  *
  * 设计要点：
- *  - 零第三方依赖，只用 node 内置模块（node >= 18，需要全局 fetch）
- *  - 存储全部走 CloudBase 的 PostgREST HTTP 接口，不直连数据库、不落本地 SQLite/JSON 文件
- *  - service_role 的 API Key 只存在于服务端环境变量，绝不下发到浏览器
- *  - 前端契约与线上版本保持完全一致（/api/login /api/memos ...）
+ *  - 零第三方依赖：node:http + node:sqlite（node >= 22.5），不需要 npm install
+ *  - 数据落在本地单个 SQLite 文件（默认 ./data/feed.db），备份 = 复制文件
+ *  - 不依赖任何云服务，没有配额、没有按小时计费、不会被平台停机
+ *  - 前端契约保持不变（/api/login /api/memos ...），换存储不影响页面
  */
 
 const http = require('node:http');
@@ -42,15 +42,7 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch {}
 // ---------------------------------------------------------------- 配置
 const PORT = Number(process.env.PORT || 8080);
 
-const ENV_ID = process.env.CLOUDBASE_ENV_ID || 'sqyworkbuddybase-d6exnh2af5c8aef';
-// PostgREST 基址：https://<env>.api.tcloudbasegateway.com/v1/rdb/rest
-const REST_BASE =
-  process.env.CLOUDBASE_REST_BASE ||
-  `https://${ENV_ID}.api.tcloudbasegateway.com/v1/rdb/rest`;
-const API_KEY = process.env.CLOUDBASE_API_KEY || '';
-const TABLE = process.env.MEMOS_TABLE || 'memos';
-const USERS = process.env.USERS_TABLE || 'users';
-const TODOS = process.env.TODOS_TABLE || 'todos';
+const db = require('./src/db');
 
 // TODO 状态：新建 / 进行中 / 已完成 / 废弃 / 过期
 const TODO_STATUS = ['new', 'doing', 'done', 'dropped', 'expired'];
@@ -68,55 +60,8 @@ const FAV_TAG = '收藏';
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-if (!API_KEY) {
-  console.error('[fatal] 缺少 CLOUDBASE_API_KEY，服务端无法访问数据库');
-  process.exit(1);
-}
-
-// ---------------------------------------------------------------- PostgREST 客户端
-// fetch 失败时自动重试一次，并把底层错误码带出来方便诊断
-async function rest(pathAndQuery, { method = 'GET', body, prefer } = {}, attempt = 0) {
-  const url = `${REST_BASE}/${pathAndQuery}`;
-  const headers = {
-    Authorization: `Bearer ${API_KEY}`,
-    Accept: 'application/json',
-  };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (prefer) headers.Prefer = prefer;
-
-  let res;
-  try {
-    res = await fetch(url, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch (err) {
-    if (attempt < 2) {
-      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-      return rest(pathAndQuery, { method, body, prefer }, attempt + 1);
-    }
-    const cause = err && err.cause;
-    const code = cause && (cause.code || cause.message);
-    const e = new Error(`PostgREST fetch failed${code ? ` (${code})` : ''}`);
-    e.detail = `${err.message}${code ? ` cause=${code}` : ''}`;
-    throw e;
-  }
-  const text = await res.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-  }
-  if (!res.ok) {
-    const msg = typeof data === 'object' && data ? data.message || JSON.stringify(data) : data;
-    throw new Error(`PostgREST ${method} ${pathAndQuery} -> ${res.status}: ${msg}`);
-  }
-  return data;
-}
+// ---------------------------------------------------------------- 数据访问
+// 全部收敛在 ./src/db.js（本地 SQLite）。这里只保留业务需要的组合逻辑。
 
 // ---------------------------------------------------------------- 数据映射
 // DB 行 -> 前端契约（createdTs / updatedTs 为毫秒时间戳）
@@ -319,8 +264,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/auth' && method === 'GET') {
       const tk = url.searchParams.get('token') || '';
       if (!/^[0-9a-fA-F-]{36}$/.test(tk)) return sendJson(res, 401, { error: 'bad_token' });
-      const rows = await rest(`${USERS}?token=eq.${tk}&select=name,role`);
-      const u = rows && rows[0];
+      const u = db.findUserByToken(tk);
       if (!u) return sendJson(res, 401, { error: 'bad_token' });
       return sendJson(res, 200, { ok: true, name: u.name, role: u.role }, {
         'Set-Cookie': cookieHeader(issueToken({ name: u.name, role: u.role })),
@@ -335,7 +279,7 @@ const server = http.createServer(async (req, res) => {
 
     // ---- 健康检查（免登录，用于存活探测）
     if (p === '/api/health' && method === 'GET') {
-      return sendJson(res, 200, { ok: true, storage: 'cloudbase-postgres', table: TABLE });
+      return sendJson(res, 200, { ok: true, storage: 'sqlite', dbPath: db.DB_PATH, ...db.stats() });
     }
 
     // ---- 以下接口都需要登录
@@ -353,8 +297,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/users' && method === 'GET') {
       const s = getSession(req);
       if (s.role !== 'admin') return sendJson(res, 403, { error: 'forbidden' });
-      const rows = await rest(`${USERS}?select=id,name,role,token,created_at&order=role.desc,created_at.asc`);
-      return sendJson(res, 200, { users: rows || [] });
+      return sendJson(res, 200, { users: db.listUsers() });
     }
 
     if (p === '/api/users' && method === 'POST') {
@@ -363,14 +306,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const name = typeof body.name === 'string' ? body.name.trim().slice(0, 24) : '';
       if (!name) return sendJson(res, 400, { error: 'empty_name' });
-      const dup = await rest(`${USERS}?name=eq.${encodeURIComponent(name)}&select=id`);
-      if (dup && dup.length) return sendJson(res, 409, { error: 'name_exists' });
-      const row = await rest(USERS, {
-        method: 'POST',
-        body: [{ name, role: 'member' }],
-        prefer: 'return=representation',
-      });
-      const created = Array.isArray(row) ? row[0] : row;
+      if (db.findUserByName(name)) return sendJson(res, 409, { error: 'name_exists' });
+      const created = db.createUser({ name, role: 'member' });
       return sendJson(res, 201, { user: { id: created.id, name: created.name, role: created.role, token: created.token } });
     }
 
@@ -380,19 +317,16 @@ const server = http.createServer(async (req, res) => {
       if (s.role !== 'admin') return sendJson(res, 403, { error: 'forbidden' });
       const id = decodeURIComponent(mu[1]);
       if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
-      const target = await rest(`${USERS}?id=eq.${id}&select=role`);
-      if (!target || !target.length) return sendJson(res, 404, { error: 'not_found' });
-      if (target[0].role === 'admin') return sendJson(res, 400, { error: 'cannot_delete_admin' });
-      await rest(`${USERS}?id=eq.${id}`, { method: 'DELETE' });
+      const target = db.findUserById(id);
+      if (!target) return sendJson(res, 404, { error: 'not_found' });
+      if (target.role === 'admin') return sendJson(res, 400, { error: 'cannot_delete_admin' });
+      db.deleteUser(id);
       return sendJson(res, 200, { ok: true });
     }
 
     // ---- 导出（放在 /api/memos/:id 之前匹配）
     if (p === '/api/memos/export' && method === 'GET') {
-      const rows = await rest(
-        `${TABLE}?select=id,content,tags,author,pinned,created_at,updated_at&order=created_at.desc`
-      );
-      const memos = (rows || []).map(toDto);
+      const memos = db.listMemos().map(toDto);
       const stamp = new Date().toISOString().slice(0, 10);
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -403,10 +337,7 @@ const server = http.createServer(async (req, res) => {
 
     // ---- 列表
     if (p === '/api/memos' && method === 'GET') {
-      const rows = await rest(
-        `${TABLE}?select=id,content,tags,author,pinned,created_at,updated_at&order=pinned.desc,created_at.desc`
-      );
-      return sendJson(res, 200, { memos: (rows || []).map(toDto) });
+      return sendJson(res, 200, { memos: db.listMemos().map(toDto) });
     }
 
     // ---- 新建（作者取当前登录身份）
@@ -415,13 +346,11 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const content = typeof body.content === 'string' ? body.content.trim() : '';
       if (!content) return sendJson(res, 400, { error: 'empty' });
-      const now = new Date().toISOString();
-      const row = await rest(TABLE, {
-        method: 'POST',
-        body: [{ content, tags: parseTags(content), author: s.name, created_at: now, updated_at: now }],
-        prefer: 'return=representation',
+      const created = db.createMemo({
+        content,
+        tags: parseTags(content),
+        author: s.name,
       });
-      const created = Array.isArray(row) ? row[0] : row;
       return sendJson(res, 201, { memo: toDto(created) });
     }
 
@@ -441,8 +370,8 @@ const server = http.createServer(async (req, res) => {
           const tags = parseTags(content);
           // 正文里没写 #收藏 时也要保住星标（否则一编辑就掉星）
           if (!tags.includes(FAV_TAG)) {
-            const cur = await rest(`${TABLE}?id=eq.${id}&select=tags`);
-            const old = cur && cur[0] && Array.isArray(cur[0].tags) ? cur[0].tags : [];
+            const cur = db.getMemo(id);
+            const old = cur && Array.isArray(cur.tags) ? cur.tags : [];
             if (old.includes(FAV_TAG)) tags.push(FAV_TAG);
           }
           patch.tags = tags;
@@ -459,18 +388,13 @@ const server = http.createServer(async (req, res) => {
         if (!Object.keys(patch).length) return sendJson(res, 400, { error: 'nothing_to_update' });
         patch.updated_at = new Date().toISOString();
 
-        const row = await rest(`${TABLE}?id=eq.${id}`, {
-          method: 'PATCH',
-          body: patch,
-          prefer: 'return=representation',
-        });
-        const updated = Array.isArray(row) ? row[0] : row;
+        const updated = db.updateMemo(id, patch);
         if (!updated) return sendJson(res, 404, { error: 'not_found' });
         return sendJson(res, 200, { memo: toDto(updated) });
       }
 
       if (method === 'DELETE') {
-        await rest(`${TABLE}?id=eq.${id}`, { method: 'DELETE' });
+        db.deleteMemo(id);
         return sendJson(res, 200, { ok: true });
       }
 
@@ -479,10 +403,7 @@ const server = http.createServer(async (req, res) => {
 
     // ---- TODO：列表
     if (p === '/api/todos' && method === 'GET') {
-      const rows = await rest(
-        `${TODOS}?select=id,content,tags,author,status,created_at,updated_at&order=created_at.desc`
-      );
-      return sendJson(res, 200, { todos: (rows || []).map(toTodoDto) });
+      return sendJson(res, 200, { todos: db.listTodos().map(toTodoDto) });
     }
 
     // ---- TODO：新建
@@ -492,13 +413,12 @@ const server = http.createServer(async (req, res) => {
       const content = typeof body.content === 'string' ? body.content.trim() : '';
       if (!content) return sendJson(res, 400, { error: 'empty' });
       const status = TODO_STATUS.includes(body.status) ? body.status : 'new';
-      const now = new Date().toISOString();
-      const row = await rest(TODOS, {
-        method: 'POST',
-        body: [{ content, tags: parseTags(content), author: s.name, status, created_at: now, updated_at: now }],
-        prefer: 'return=representation',
+      const created = db.createTodo({
+        content,
+        tags: parseTags(content),
+        author: s.name,
+        status,
       });
-      const created = Array.isArray(row) ? row[0] : row;
       return sendJson(res, 201, { todo: toTodoDto(created) });
     }
 
@@ -518,8 +438,8 @@ const server = http.createServer(async (req, res) => {
           const tags = parseTags(content);
           // 正文里没写 #收藏 时也要保住星标
           if (!tags.includes(FAV_TAG)) {
-            const cur = await rest(`${TODOS}?id=eq.${id}&select=tags`);
-            const old = cur && cur[0] && Array.isArray(cur[0].tags) ? cur[0].tags : [];
+            const cur = db.getTodo(id);
+            const old = cur && Array.isArray(cur.tags) ? cur.tags : [];
             if (old.includes(FAV_TAG)) tags.push(FAV_TAG);
           }
           patch.tags = tags;
@@ -535,18 +455,13 @@ const server = http.createServer(async (req, res) => {
         if (!Object.keys(patch).length) return sendJson(res, 400, { error: 'nothing_to_update' });
         patch.updated_at = new Date().toISOString();
 
-        const row = await rest(`${TODOS}?id=eq.${id}`, {
-          method: 'PATCH',
-          body: patch,
-          prefer: 'return=representation',
-        });
-        const updated = Array.isArray(row) ? row[0] : row;
+        const updated = db.updateTodo(id, patch);
         if (!updated) return sendJson(res, 404, { error: 'not_found' });
         return sendJson(res, 200, { todo: toTodoDto(updated) });
       }
 
       if (method === 'DELETE') {
-        await rest(`${TODOS}?id=eq.${id}`, { method: 'DELETE' });
+        db.deleteTodo(id);
         return sendJson(res, 200, { ok: true });
       }
 
@@ -567,5 +482,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[memos-cloud] listening on :${PORT}`);
-  console.log(`[memos-cloud] storage: ${REST_BASE}/${TABLE}`);
+  console.log(`[memos-cloud] storage: sqlite ${db.DB_PATH}`);
+  const s = db.stats();
+  console.log(`[memos-cloud] data: ${s.memos} memos / ${s.todos} todos / ${s.users} users`);
 });
