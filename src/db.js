@@ -7,7 +7,11 @@
  *  - 单文件 + WAL，备份就是复制一个文件
  *  - node >= 22.5 自带 node:sqlite，不需要 npm install
  *
- * 数据库位置：默认 <项目根>/data/feed.db，可用 DB_PATH 覆盖。
+ * 数据库位置（优先级）：
+ *   1. DB_PATH 环境变量
+ *   2. 云托管沙箱（存在 /workspace）→ /workspace/.feed-data/feed.db
+ *      —— 故意放在项目目录之外：重新部署会重传项目目录，放里面会被覆盖
+ *   3. 本机 → <项目根>/data/feed.db
  *
  * 表结构与原 PostgreSQL 版一一对应，字段语义见注释。
  */
@@ -17,7 +21,16 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'feed.db');
+// 库文件位置：
+//  - 显式 DB_PATH 优先
+//  - 云托管沙箱（根目录是 /workspace）默认落到项目目录**之外**的 .feed-data/，
+//    否则每次重新部署上传的 data/ 目录会把线上库覆盖掉
+//  - 本机跑就是项目下的 data/feed.db
+function defaultDbPath() {
+  if (fs.existsSync('/workspace')) return '/workspace/.feed-data/feed.db';
+  return path.join(__dirname, '..', 'data', 'feed.db');
+}
+const DB_PATH = process.env.DB_PATH || defaultDbPath();
 const TODO_STATUS = ['new', 'doing', 'done', 'dropped', 'expired'];
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
