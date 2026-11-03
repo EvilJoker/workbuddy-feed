@@ -7,3 +7,6 @@ __pycache__/
 
 # 本地数据库（含数据，绝不进版本库）
 data/
+
+# COS 恢复演练产物
+restored/

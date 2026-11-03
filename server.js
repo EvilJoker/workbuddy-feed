@@ -335,6 +335,24 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ exportedAt: new Date().toISOString(), count: memos.length, memos }, null, 2));
     }
 
+    // ---- SQLite 一致性快照下载（仅管理员；供外部备份管线拉取）
+    if (p === '/api/backup' && method === 'GET') {
+      const s = getSession(req);
+      if (s.role !== 'admin') return sendJson(res, 403, { error: 'forbidden' });
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+      const tmp = `${db.DB_PATH}.snap-${stamp}`;
+      // VACUUM INTO：单读事务导出完整快照，WAL 模式下也不会拷到半个事务
+      db.db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+      const body = fs.readFileSync(tmp);
+      fs.unlinkSync(tmp);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': body.length,
+        'Content-Disposition': `attachment; filename="feed-${stamp}.db"`,
+      });
+      return res.end(body);
+    }
+
     // ---- 列表
     if (p === '/api/memos' && method === 'GET') {
       return sendJson(res, 200, { memos: db.listMemos().map(toDto) });
