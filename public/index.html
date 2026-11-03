@@ -23,7 +23,8 @@
 
   /* header */
   header { display: flex; justify-content: space-between; align-items: center; padding: 6px 2px 14px; gap: 8px; }
-  header .logo { font-size: 19px; font-weight: 700; white-space: nowrap; }
+  header .logo { font-size: 19px; font-weight: 700; white-space: nowrap; cursor: pointer; user-select: none; border-radius: 8px; padding: 2px 6px 2px 2px; }
+  header .logo:hover { background: #eef1f4; }
   header .logo span { color: var(--accent); }
   header > div:last-child { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   header button { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 8px; padding: 5px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
@@ -45,6 +46,7 @@
   .composer .tools > button { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 4px 10px; font-size: 16px; cursor: pointer; line-height: 1.3; }
   .composer .tools > button:hover { background: var(--tag-bg); }
   .composer .tools .tagbtn { font-size: 13px; color: var(--tag-text); }
+  .composer .tools select { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 4px 8px; font-size: 13px; color: var(--text); }
   .pop { display: none; position: absolute; bottom: 40px; left: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14); z-index: 50; max-width: min(312px, calc(100vw - 56px)); }
   .pop.show { display: block; }
   .pop .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
@@ -127,6 +129,20 @@
   .pager button.cur { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .pager .pinfo { color: var(--muted); font-size: 13px; padding: 0 2px; }
 
+  /* TODO 状态（徽章配色只作用于 .stchip，卡片只留淡底色） */
+  .stchip { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 1px 8px; white-space: nowrap; }
+  .stchip.st-new     { background: #eef1f4; color: #5a6472; }
+  .stchip.st-doing   { background: #e8f0fe; color: #1a5cc8; }
+  .stchip.st-done    { background: #e6f7e9; color: #1a7f37; }
+  .stchip.st-dropped { background: #f0f0f0; color: #9aa0a6; text-decoration: line-through; }
+  .stchip.st-expired { background: #fdecea; color: #c5221f; }
+  .memo.st-doing   { background: #f8faff; }
+  .memo.st-done    { background: #f8fcf9; }
+  .memo.st-done .title, .memo.st-dropped .title { text-decoration: line-through; opacity: .75; }
+  .memo.st-dropped { opacity: .72; }
+  .memo.st-expired { border-left: 3px solid #e8a0a0; background: #fffbfa; }
+  .memo .actions select { border: 1px solid var(--border); background: var(--card); border-radius: 7px; padding: 2px 6px; font-size: 12px; color: var(--text); cursor: pointer; }
+
   /* mobile */
   @media (max-width: 480px) {
     .wrap { padding: 12px 10px 70px; }
@@ -154,7 +170,7 @@
 <div id="app" style="display:none">
   <div class="wrap">
     <header>
-      <div class="logo">📒 <span class="brand-long">WorkBuddy </span><span>Feed</span></div>
+      <div class="logo" id="logoBtn" onclick="toggleView()" title="点击切换 Feed / ToDo">📒 <span class="brand-long">WorkBuddy </span><span id="logoName">Feed</span></div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="who" id="who"></span>
         <button id="refreshBtn" class="iconbtn" onclick="manualRefresh()" title="刷新（每 60 秒自动刷新）">🔄</button>
@@ -167,6 +183,13 @@
     <div class="composer">
       <textarea id="input" placeholder="记录此刻的想法… 支持 #标签 `代码` **加粗** 和链接" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter')post()"></textarea>
       <div class="tools">
+        <select id="newStatus" style="display:none" title="初始状态">
+          <option value="new">新建</option>
+          <option value="doing">进行中</option>
+          <option value="done">已完成</option>
+          <option value="dropped">废弃</option>
+          <option value="expired">过期</option>
+        </select>
         <button type="button" onclick="togglePop('emojiPop', event)" title="插入表情">😀</button>
         <button type="button" class="tagbtn" onclick="togglePop('tagPop', event)" title="选择或新建标签"># 标签</button>
         <div class="pop" id="emojiPop">
@@ -181,13 +204,21 @@
         </div>
       </div>
       <div class="bar">
-        <span class="hint">表情 · #标签 均可搜索 · Ctrl+Enter 发送</span>
+        <span class="hint" id="composerHint">表情 · #标签 均可搜索 · Ctrl+Enter 发送</span>
         <div class="btns"><button id="postBtn" onclick="post()">记录</button></div>
       </div>
     </div>
 
     <div class="toolbar">
       <input type="search" id="q" placeholder="搜索内容或标签…" oninput="onFilterChange()">
+      <select id="statusFilter" style="display:none" onchange="onFilterChange()">
+        <option value="">全部状态</option>
+        <option value="new">新建</option>
+        <option value="doing">进行中</option>
+        <option value="done">已完成</option>
+        <option value="dropped">废弃</option>
+        <option value="expired">过期</option>
+      </select>
       <select id="tagFilter" onchange="onFilterChange()"><option value="">全部标签</option></select>
       <select id="sortSel" onchange="onFilterChange()">
         <option value="new">最新优先</option>
@@ -218,8 +249,22 @@
 
 <script>
 let memos = [];
+let todos = [];
+let view = 'feed'; // 'feed' | 'todo'（点左上角 Logo 切换）
 let editingId = null;
 let me = { name: '', role: '' };
+
+const PAGE_SIZE = 20;
+const FAV_TAG = '收藏';
+// TODO 状态：key -> 中文名
+const ST = { new: '新建', doing: '进行中', done: '已完成', dropped: '废弃', expired: '过期' };
+let page = 1;
+let favOnly = false;
+const openIds = new Set();
+
+const apiBase = () => (view === 'todo' ? '/api/todos' : '/api/memos');
+const items = () => (view === 'todo' ? todos : memos);
+const noun = () => (view === 'todo' ? 'ToDo' : 'memo');
 
 async function api(path, opts) {
   opts = opts || {};
@@ -246,8 +291,34 @@ async function init() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   await loadMe();
-  await loadMemos();
+  await loadItems();
   startAutoRefresh();
+}
+
+// ---- 视图切换：点左上角 Logo 在 Feed / TODO 之间切换 ----
+function toggleView() {
+  view = view === 'feed' ? 'todo' : 'feed';
+  document.getElementById('logoName').textContent = view === 'todo' ? 'ToDo' : 'Feed';
+  document.getElementById('logoBtn').childNodes[0].textContent = view === 'todo' ? '✅ ' : '📒 ';
+  document.title = view === 'todo' ? 'WorkBuddy ToDo' : 'WorkBuddy Feed';
+  // 切视图时重置筛选，避免上一版的条件串味
+  document.getElementById('q').value = '';
+  document.getElementById('statusFilter').value = '';
+  document.getElementById('statusFilter').style.display = view === 'todo' ? '' : 'none';
+  document.getElementById('newStatus').style.display = view === 'todo' ? '' : 'none';
+  document.getElementById('newStatus').value = 'new';
+  document.getElementById('exportBtn').style.display = view === 'feed' ? '' : 'none';
+  if (favOnly) { favOnly = false; document.getElementById('favBtn').classList.remove('on'); }
+  page = 1;
+  editingId = null;
+  document.getElementById('input').placeholder = view === 'todo'
+    ? '添加一条 ToDo… 支持 #标签 `代码` **加粗** 和链接'
+    : '记录此刻的想法… 支持 #标签 `代码` **加粗** 和链接';
+  document.getElementById('postBtn').textContent = view === 'todo' ? '添加' : '记录';
+  document.getElementById('composerHint').textContent = view === 'todo'
+    ? '表情 · #标签 · 状态随时可改 · Ctrl+Enter 添加'
+    : '表情 · #标签 均可搜索 · Ctrl+Enter 发送';
+  loadItems();
 }
 
 function showLogin() {
@@ -263,12 +334,12 @@ let refreshing = false;
 
 // 用来判断数据有没有变（避免无变化时重绘、打断滚动/选中）
 function snapshot() {
-  return memos.map(m => `${m.id}:${m.updatedTs}:${m.pinned ? 1 : 0}`).join('|');
+  return items().map(m => `${m.id}:${m.updatedTs}:${m.status || ''}:${m.pinned ? 1 : 0}`).join('|');
 }
 
-async function loadMemos() {
-  const d = await api('/api/memos');
-  memos = d.memos;
+async function loadItems() {
+  const d = await api(apiBase());
+  if (view === 'todo') { todos = d.todos; } else { memos = d.memos; }
   lastRefresh = Date.now();
   render();
 }
@@ -288,7 +359,7 @@ function updateFresh(msg) {
   el.textContent = `自动刷新 ${REFRESH_INTERVAL / 1000}s · ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-async function refreshMemos(manual) {
+async function refreshItems(manual) {
   if (refreshing) return;
   // 未登录 / 编辑中（自动刷新时不打断）/ 页面在后台（自动刷新时跳过）
   if (document.getElementById('app').style.display === 'none') return;
@@ -301,8 +372,8 @@ async function refreshMemos(manual) {
   const before = snapshot();
   let err = '';
   try {
-    const d = await api('/api/memos');
-    memos = d.memos;
+    const d = await api(apiBase());
+    if (view === 'todo') { todos = d.todos; } else { memos = d.memos; }
     lastRefresh = Date.now();
     if (snapshot() !== before) { render(); } else { updateFresh(); }
   } catch (e) {
@@ -315,19 +386,19 @@ async function refreshMemos(manual) {
   }
 }
 
-function manualRefresh() { refreshMemos(true); }
+function manualRefresh() { refreshItems(true); }
 
 function startAutoRefresh() {
   if (autoTimer) clearInterval(autoTimer);
-  autoTimer = setInterval(() => refreshMemos(false), REFRESH_INTERVAL);
+  autoTimer = setInterval(() => refreshItems(false), REFRESH_INTERVAL);
   // 从后台切回前台时立刻补一次（不等到下一个 60s）
   if (!startAutoRefresh._bound) {
     startAutoRefresh._bound = true;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') refreshMemos(false);
+      if (document.visibilityState === 'visible') refreshItems(false);
     });
     window.addEventListener('focus', () => {
-      if (Date.now() - lastRefresh > REFRESH_INTERVAL) refreshMemos(false);
+      if (Date.now() - lastRefresh > REFRESH_INTERVAL) refreshItems(false);
     });
   }
   updateFresh();
@@ -387,10 +458,12 @@ async function delUser(id, name) {
 async function post() {
   const el = document.getElementById('input');
   if (!el.value.trim()) return;
-  await api('/api/memos', { method: 'POST', body: JSON.stringify({ content: el.value }) });
+  const body = { content: el.value };
+  if (view === 'todo') body.status = document.getElementById('newStatus').value || 'new';
+  await api(apiBase(), { method: 'POST', body: JSON.stringify(body) });
   el.value = '';
   page = 1;
-  await loadMemos();
+  await loadItems();
 }
 
 function esc(s) {
@@ -449,7 +522,7 @@ document.addEventListener('click', e => {
 });
 
 function renderTagPop() {
-  const tags = [...new Set(memos.flatMap(m => m.tags))].sort();
+  const tags = [...new Set(items().flatMap(m => m.tags))].sort();
   const box = document.getElementById('tagChips');
   box.innerHTML = tags.length
     ? tags.map(t => `<span class="chip" onclick="insertText('#${t}');closePops()">#${t}</span>`).join('')
@@ -477,39 +550,58 @@ function startEdit(id) {
 
 async function saveEdit(id) {
   const ta = document.querySelector('.editbox');
-  await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ content: ta.value }) });
+  await api(apiBase() + '/' + id, { method: 'PATCH', body: JSON.stringify({ content: ta.value }) });
   editingId = null;
-  await loadMemos();
+  await loadItems();
 }
 
 async function togglePin(id) {
   const m = memos.find(x => x.id === id);
   await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ pinned: !m.pinned }) });
-  await loadMemos();
+  await loadItems();
+}
+
+async function setTodoStatus(id, status) {
+  try {
+    const d = await api('/api/todos/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
+    if (d && d.todo) {
+      const i = todos.findIndex(x => x.id === id);
+      if (i >= 0) todos[i] = d.todo;
+    }
+  } catch (e) { return; }
+  render();
 }
 
 async function del(id) {
-  if (!confirm('确定删除这条 memo？')) return;
-  await api('/api/memos/' + id, { method: 'DELETE' });
-  await loadMemos();
+  if (!confirm(`确定删除这条 ${noun()}？`)) return;
+  await api(apiBase() + '/' + id, { method: 'DELETE' });
+  await loadItems();
 }
 
 function render() {
   const q = document.getElementById('q').value.trim().toLowerCase().replace(/^#/, '');
   const sort = document.getElementById('sortSel').value;
-  let list = memos.slice();
+  const src = items();
+  let list = src.slice();
   if (q) list = list.filter(m => m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
 
   // tag filter options
-  const tags = [...new Set(memos.flatMap(m => m.tags))].sort();
+  const tags = [...new Set(src.flatMap(m => m.tags))].sort();
   const sel = document.getElementById('tagFilter');
   const cur = sel.value;
   sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option ${t===cur?'selected':''}>${t}</option>`).join('');
   const tf = sel.value;
   if (tf) list = list.filter(m => m.tags.includes(tf));
+
+  let sf = '';
+  if (view === 'todo') {
+    sf = document.getElementById('statusFilter').value;
+    if (sf) list = list.filter(m => (m.status || 'new') === sf);
+  }
   if (favOnly) list = list.filter(isFav);
 
-  list.sort((a, b) => (b.pinned - a.pinned) || (sort === 'new' ? b.createdTs - a.createdTs : a.createdTs - b.createdTs));
+  list.sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) ||
+    (sort === 'new' ? b.createdTs - a.createdTs : a.createdTs - b.createdTs));
 
   // ---- 分页 ----
   const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
@@ -518,10 +610,10 @@ function render() {
   const start = (page - 1) * PAGE_SIZE;
   const pageList = list.slice(start, start + PAGE_SIZE);
 
-  const total = memos.length;
-  const favCount = memos.filter(isFav).length;
-  let ct = total ? `共 ${total} 条 memo` : '';
-  if (q || tf || favOnly) ct += ` · 筛选出 ${list.length} 条`;
+  const total = src.length;
+  const favCount = src.filter(isFav).length;
+  let ct = total ? `共 ${total} 条 ${noun()}` : '';
+  if (q || tf || favOnly || sf) ct += ` · 筛选出 ${list.length} 条`;
   if (pages > 1) ct += ` · 第 ${page}/${pages} 页`;
   if (favCount) ct += ` · ⭐ ${favCount}`;
   document.getElementById('countText').textContent = ct;
@@ -529,49 +621,88 @@ function render() {
 
   const box = document.getElementById('list');
   if (!list.length) {
-    box.innerHTML = `<div class="empty">${favOnly ? '还没有收藏，点 memo 右侧的 ☆ 就能收藏 ⭐' : (q || tf ? '没有匹配的记录' : '还没有记录，写下第一条吧 ✍️')}</div>`;
+    let msg;
+    if (favOnly) msg = `还没有收藏，点 ${noun()} 右侧的 ☆ 就能收藏 ⭐`;
+    else if (q || tf || sf) msg = '没有匹配的记录';
+    else msg = view === 'todo' ? '还没有 ToDo，添加一条吧 ✅' : '还没有记录，写下第一条吧 ✍️';
+    box.innerHTML = `<div class="empty">${msg}</div>`;
     document.getElementById('pager').innerHTML = '';
     return;
   }
-  box.innerHTML = pageList.map(m => {
-    if (m.id === editingId) {
-      return `<div class="memo open" onclick="event.stopPropagation()"><textarea class="editbox">${m.content.replace(/</g,'&lt;')}</textarea>
-        <div class="actions"><span onclick="saveEdit('${m.id}')">💾 保存</span><span onclick="editingId=null;render()">取消</span></div></div>`;
-    }
-    const fav = isFav(m);
-    const open = openIds.has(m.id);
-    const parts = splitMemo(m.content);
-    const titleTxt = plainTitle(parts.title) || parts.title || '（无标题）';
-    const tagChips = (m.tags || []).map(t =>
-      `<span class="tchip ${t === FAV_TAG ? 'fav' : ''}" onclick="event.stopPropagation();filterTag('#${String(t).replace(/'/g,'')}')">${t === FAV_TAG ? '⭐ 收藏' : '#' + String(t).replace(/</g,'&lt;')}</span>`).join('');
-    return `<div class="memo ${m.pinned?'pinned':''} ${open?'open':''}" onclick="onCardClick(event,'${m.id}')">
-      <div class="meta">
-        <span>${m.pinned ? '<span class="pin-flag">📌 置顶</span> · ' : ''}<span class="who">👤 ${String(m.author||'管理员').replace(/</g,'&lt;')}</span> · ${fmt(m.createdTs)}</span>
-        <span class="starbox">${m.updatedTs > m.createdTs ? '<span style="font-size:11px;color:var(--muted)">已编辑</span>' : ''}<span class="star ${fav?'on':''}" title="${fav?'取消收藏':'收藏'}" onclick="toggleStar(event,'${m.id}')">${fav?'★':'☆'}</span></span>
-      </div>
-      <div class="title">${esc(titleTxt)}</div>
-      ${tagChips ? `<div class="tags">${tagChips}</div>` : ''}
-      ${parts.body ? `<div class="content">${esc(parts.body)}</div>` : ''}
-      <div class="actions">
-        <span class="expand-hint" onclick="toggleOpen('${m.id}', event)">${open ? '收起 ▴' : '展开 ▾'}</span>
-        <span onclick="togglePin('${m.id}')">${m.pinned ? '取消置顶' : '置顶'}</span>
-        <span onclick="startEdit('${m.id}')">编辑</span>
-        <span onclick="del('${m.id}')">删除</span>
-      </div>
-    </div>`;
-  }).join('');
+  box.innerHTML = pageList.map(m => view === 'todo' ? todoCardHtml(m) : memoCardHtml(m)).join('');
 
   renderPager(list.length, pages);
   requestAnimationFrame(syncExpandHints);
 }
 
-// ---- 折叠 / 展开 ----
-const PAGE_SIZE = 20;
-const FAV_TAG = '收藏';
-let page = 1;
-let favOnly = false;
-const openIds = new Set();
+function starboxHtml(m) {
+  const fav = isFav(m);
+  const edited = m.updatedTs > m.createdTs ? '<span style="font-size:11px;color:var(--muted)">已编辑</span>' : '';
+  return `<span class="starbox">${edited}<span class="star ${fav?'on':''}" title="${fav?'取消收藏':'收藏'}" onclick="toggleStar(event,'${m.id}')">${fav?'★':'☆'}</span></span>`;
+}
 
+function tagChipsHtml(m) {
+  const chips = (m.tags || []).map(t =>
+    `<span class="tchip ${t === FAV_TAG ? 'fav' : ''}" onclick="event.stopPropagation();filterTag('#${String(t).replace(/'/g,'')}')">${t === FAV_TAG ? '⭐ 收藏' : '#' + String(t).replace(/</g,'&lt;')}</span>`).join('');
+  return chips ? `<div class="tags">${chips}</div>` : '';
+}
+
+// memo 卡片（Feed 视图）
+function memoCardHtml(m) {
+  if (m.id === editingId) return editCardHtml(m);
+  const open = openIds.has(m.id);
+  const parts = splitMemo(m.content);
+  const titleTxt = plainTitle(parts.title) || parts.title || '（无标题）';
+  return `<div class="memo ${m.pinned?'pinned':''} ${open?'open':''}" onclick="onCardClick(event,'${m.id}')">
+    <div class="meta">
+      <span>${m.pinned ? '<span class="pin-flag">📌 置顶</span> · ' : ''}<span class="who">👤 ${String(m.author||'管理员').replace(/</g,'&lt;')}</span> · ${fmt(m.createdTs)}</span>
+      ${starboxHtml(m)}
+    </div>
+    <div class="title">${esc(titleTxt)}</div>
+    ${tagChipsHtml(m)}
+    ${parts.body ? `<div class="content">${esc(parts.body)}</div>` : ''}
+    <div class="actions">
+      <span class="expand-hint" onclick="toggleOpen('${m.id}', event)">${open ? '收起 ▴' : '展开 ▾'}</span>
+      <span onclick="togglePin('${m.id}')">${m.pinned ? '取消置顶' : '置顶'}</span>
+      <span onclick="startEdit('${m.id}')">编辑</span>
+      <span onclick="del('${m.id}')">删除</span>
+    </div>
+  </div>`;
+}
+
+// TODO 卡片（TODO 视图）
+function todoCardHtml(m) {
+  if (m.id === editingId) return editCardHtml(m);
+  const st = ST[m.status] ? m.status : 'new';
+  const open = openIds.has(m.id);
+  const parts = splitMemo(m.content);
+  const titleTxt = plainTitle(parts.title) || parts.title || '（无标题）';
+  const opts = Object.keys(ST).map(k =>
+    `<option value="${k}" ${k === st ? 'selected' : ''}>${ST[k]}</option>`).join('');
+  return `<div class="memo st-${st} ${open?'open':''}" onclick="onCardClick(event,'${m.id}')">
+    <div class="meta">
+      <span><span class="stchip st-${st}">${ST[st]}</span> · <span class="who">👤 ${String(m.author||'管理员').replace(/</g,'&lt;')}</span> · ${fmt(m.createdTs)}</span>
+      ${starboxHtml(m)}
+    </div>
+    <div class="title">${esc(titleTxt)}</div>
+    ${tagChipsHtml(m)}
+    ${parts.body ? `<div class="content">${esc(parts.body)}</div>` : ''}
+    <div class="actions">
+      <span class="expand-hint" onclick="toggleOpen('${m.id}', event)">${open ? '收起 ▴' : '展开 ▾'}</span>
+      <select title="修改状态" onclick="event.stopPropagation()" onchange="setTodoStatus('${m.id}', this.value)">${opts}</select>
+      <span onclick="startEdit('${m.id}')">编辑</span>
+      <span onclick="del('${m.id}')">删除</span>
+    </div>
+  </div>`;
+}
+
+// 编辑中的卡片（Feed / TODO 共用）
+function editCardHtml(m) {
+  return `<div class="memo open" onclick="event.stopPropagation()"><textarea class="editbox">${m.content.replace(/</g,'&lt;')}</textarea>
+    <div class="actions"><span onclick="saveEdit('${m.id}')">💾 保存</span><span onclick="editingId=null;render()">取消</span></div></div>`;
+}
+
+// ---- 折叠 / 展开 ----
 function isFav(m) { return (m.tags || []).indexOf(FAV_TAG) >= 0; }
 
 // 首行当标题，其余当正文
@@ -593,7 +724,7 @@ function plainTitle(s) {
 }
 
 function onCardClick(ev, id) {
-  if (ev.target.closest('a, .tag, .tchip, .actions, .star, textarea, button')) return;
+  if (ev.target.closest('a, .tag, .tchip, .actions, .star, textarea, button, select')) return;
   const card = ev.currentTarget;
   const hint = card.querySelector('.expand-hint');
   if (hint && hint.style.display === 'none') return; // 内容本来就没被截断
@@ -660,15 +791,17 @@ function toggleFavFilter() {
 
 async function toggleStar(ev, id) {
   if (ev) ev.stopPropagation();
-  const m = memos.find(x => x.id === id);
+  const arr = items();
+  const m = arr.find(x => x.id === id);
   if (!m) return;
   const tags = new Set(m.tags || []);
   if (tags.has(FAV_TAG)) tags.delete(FAV_TAG); else tags.add(FAV_TAG);
   try {
-    const d = await api('/api/memos/' + id, { method: 'PATCH', body: JSON.stringify({ tags: [...tags] }) });
-    if (d && d.memo) {
-      const i = memos.findIndex(x => x.id === id);
-      if (i >= 0) memos[i] = d.memo;
+    const d = await api(apiBase() + '/' + id, { method: 'PATCH', body: JSON.stringify({ tags: [...tags] }) });
+    const updated = d && (d.memo || d.todo);
+    if (updated) {
+      const i = arr.findIndex(x => x.id === id);
+      if (i >= 0) arr[i] = updated;
     }
   } catch (e) { return; }
   render();

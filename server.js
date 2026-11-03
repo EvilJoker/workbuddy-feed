@@ -50,6 +50,10 @@ const REST_BASE =
 const API_KEY = process.env.CLOUDBASE_API_KEY || '';
 const TABLE = process.env.MEMOS_TABLE || 'memos';
 const USERS = process.env.USERS_TABLE || 'users';
+const TODOS = process.env.TODOS_TABLE || 'todos';
+
+// TODO 状态：新建 / 进行中 / 已完成 / 废弃 / 过期
+const TODO_STATUS = ['new', 'doing', 'done', 'dropped', 'expired'];
 
 const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD || 'memos2026';
 const SESSION_SECRET =
@@ -140,6 +144,12 @@ function parseTags(content) {
     if (tag) out.add(tag);
   }
   return [...out];
+}
+
+// DB 行 -> TODO 前端契约
+function toTodoDto(row) {
+  const t = toDto(row);
+  return { ...t, status: TODO_STATUS.includes(row.status) ? row.status : 'new' };
 }
 
 // ---------------------------------------------------------------- 会话（无状态 HMAC cookie）
@@ -461,6 +471,82 @@ const server = http.createServer(async (req, res) => {
 
       if (method === 'DELETE') {
         await rest(`${TABLE}?id=eq.${id}`, { method: 'DELETE' });
+        return sendJson(res, 200, { ok: true });
+      }
+
+      return sendJson(res, 405, { error: 'method_not_allowed' });
+    }
+
+    // ---- TODO：列表
+    if (p === '/api/todos' && method === 'GET') {
+      const rows = await rest(
+        `${TODOS}?select=id,content,tags,author,status,created_at,updated_at&order=created_at.desc`
+      );
+      return sendJson(res, 200, { todos: (rows || []).map(toTodoDto) });
+    }
+
+    // ---- TODO：新建
+    if (p === '/api/todos' && method === 'POST') {
+      const s = getSession(req);
+      const body = await readBody(req);
+      const content = typeof body.content === 'string' ? body.content.trim() : '';
+      if (!content) return sendJson(res, 400, { error: 'empty' });
+      const status = TODO_STATUS.includes(body.status) ? body.status : 'new';
+      const now = new Date().toISOString();
+      const row = await rest(TODOS, {
+        method: 'POST',
+        body: [{ content, tags: parseTags(content), author: s.name, status, created_at: now, updated_at: now }],
+        prefer: 'return=representation',
+      });
+      const created = Array.isArray(row) ? row[0] : row;
+      return sendJson(res, 201, { todo: toTodoDto(created) });
+    }
+
+    // ---- TODO：单条改 / 删
+    const td = p.match(/^\/api\/todos\/([^/]+)$/);
+    if (td) {
+      const id = decodeURIComponent(td[1]);
+      if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
+
+      if (method === 'PATCH') {
+        const body = await readBody(req);
+        const patch = {};
+        if (typeof body.content === 'string') {
+          const content = body.content.trim();
+          if (!content) return sendJson(res, 400, { error: 'empty' });
+          patch.content = content;
+          const tags = parseTags(content);
+          // 正文里没写 #收藏 时也要保住星标
+          if (!tags.includes(FAV_TAG)) {
+            const cur = await rest(`${TODOS}?id=eq.${id}&select=tags`);
+            const old = cur && cur[0] && Array.isArray(cur[0].tags) ? cur[0].tags : [];
+            if (old.includes(FAV_TAG)) tags.push(FAV_TAG);
+          }
+          patch.tags = tags;
+        }
+        if (Array.isArray(body.tags)) {
+          const clean = body.tags
+            .filter((t) => typeof t === 'string')
+            .map((t) => t.trim().replace(/^#+/, '').replace(/\s+/g, '').slice(0, 40))
+            .filter(Boolean);
+          patch.tags = [...new Set(clean)].slice(0, 30);
+        }
+        if (TODO_STATUS.includes(body.status)) patch.status = body.status;
+        if (!Object.keys(patch).length) return sendJson(res, 400, { error: 'nothing_to_update' });
+        patch.updated_at = new Date().toISOString();
+
+        const row = await rest(`${TODOS}?id=eq.${id}`, {
+          method: 'PATCH',
+          body: patch,
+          prefer: 'return=representation',
+        });
+        const updated = Array.isArray(row) ? row[0] : row;
+        if (!updated) return sendJson(res, 404, { error: 'not_found' });
+        return sendJson(res, 200, { todo: toTodoDto(updated) });
+      }
+
+      if (method === 'DELETE') {
+        await rest(`${TODOS}?id=eq.${id}`, { method: 'DELETE' });
         return sendJson(res, 200, { ok: true });
       }
 
