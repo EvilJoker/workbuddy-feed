@@ -104,7 +104,8 @@ st, r = call('POST', '/api/users', {'name': '冒烟测试成员'})
 check('重名被拒 409', st == 409, f'{st} {r}')
 
 st, r = call('GET', '/api/users')
-check('成员列表', st == 200 and len(r.get('users', [])) == 1, r)
+names = [u.get('name') for u in r.get('users', [])]
+check('成员列表含管理员与新成员', st == 200 and '管理员' in names and '冒烟测试成员' in names, names)
 
 st, r = call('DELETE', f"/api/users/{user.get('id')}")
 check('删除成员', st == 200 and r.get('ok'), r)
@@ -120,6 +121,5 @@ check('未登录访问被拒 401', st == 401, f'{st} {r}')
 
 st, r = call('GET', '/api/health')
 check('健康检查统计', st == 200 and r.get('memos') == 0 and r.get('todos') == 0, r)
-
 print(f'\n结果: {ok} 通过 / {fail} 失败')
 sys.exit(1 if fail else 0)

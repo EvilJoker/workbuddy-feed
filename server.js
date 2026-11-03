@@ -480,9 +480,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// 首次启动时确保存在管理员记录（专属免密链接依赖它）
+const adminUser = db.ensureAdmin();
+
 server.listen(PORT, () => {
   console.log(`[memos-cloud] listening on :${PORT}`);
   console.log(`[memos-cloud] storage: sqlite ${db.DB_PATH}`);
   const s = db.stats();
   console.log(`[memos-cloud] data: ${s.memos} memos / ${s.todos} todos / ${s.users} users`);
+  console.log(`[memos-cloud] admin token: ${adminUser.token}`);
 });

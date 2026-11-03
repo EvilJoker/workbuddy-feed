@@ -224,6 +224,21 @@ function deleteUser(id) {
   return db.prepare(`DELETE FROM users WHERE id = ?`).run(id).changes > 0;
 }
 
+// 保证库里有一个管理员记录：管理员专属免密链接靠它（密码登录不落此表）
+function ensureAdmin(name = '管理员') {
+  const has = db.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).get();
+  if (has) return db.prepare(`SELECT id, name, role, token, created_at FROM users WHERE id = ?`).get(has.id);
+  const id = uuid();
+  const token = uuid();
+  db.prepare(`INSERT INTO users (id, name, role, token, created_at) VALUES (?, ?, 'admin', ?, ?)`).run(
+    id,
+    name,
+    token,
+    nowIso()
+  );
+  return stmtUserByToken.get(token);
+}
+
 function stats() {
   return {
     memos: db.prepare(`SELECT COUNT(*) AS n FROM memos`).get().n,
@@ -251,5 +266,6 @@ module.exports = {
   listUsers,
   createUser,
   deleteUser,
+  ensureAdmin,
   stats,
 };
