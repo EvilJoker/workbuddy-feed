@@ -243,6 +243,16 @@ function serveStatic(req, res, urlPath) {
 }
 
 // ---------------------------------------------------------------- 路由
+// 分页：?limit=N&offset=M，缺省不限（保持老行为）
+function applyRange(rows, params) {
+  const off = Number(params.get('offset') || 0);
+  const lim = Number(params.get('limit') || 0);
+  let out = rows;
+  if (Number.isFinite(off) && off > 0) out = out.slice(off);
+  if (Number.isFinite(lim) && lim > 0) out = out.slice(0, lim);
+  return out;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const p = url.pathname.replace(/\/+$/, '') || '/';
@@ -353,9 +363,17 @@ const server = http.createServer(async (req, res) => {
       return res.end(body);
     }
 
-    // ---- 列表
+    // ---- 列表（支持 limit/offset/tag/status/q/fav 服务端过滤，缺省返回全部）
     if (p === '/api/memos' && method === 'GET') {
-      return sendJson(res, 200, { memos: db.listMemos().map(toDto) });
+      let rows = db.listMemos().map(toDto);
+      const tag = url.searchParams.get('tag');
+      const fav = url.searchParams.get('fav');
+      const q = (url.searchParams.get('q') || '').trim();
+      if (tag) rows = rows.filter((r) => (r.tags || []).includes(tag));
+      if (fav === '1' || fav === 'true') rows = rows.filter((r) => (r.tags || []).includes(FAV_TAG));
+      if (q) rows = rows.filter((r) => String(r.content || '').includes(q));
+      rows = applyRange(rows, url.searchParams);
+      return sendJson(res, 200, { memos: rows });
     }
 
     // ---- 新建（作者取当前登录身份）
@@ -377,6 +395,12 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       const id = decodeURIComponent(m[1]);
       if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
+
+      if (method === 'GET') {
+        const one = db.getMemo(id);
+        if (!one) return sendJson(res, 404, { error: 'not_found' });
+        return sendJson(res, 200, { memo: toDto(one) });
+      }
 
       if (method === 'PATCH') {
         const body = await readBody(req);
@@ -419,9 +443,19 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 405, { error: 'method_not_allowed' });
     }
 
-    // ---- TODO：列表
+    // ---- TODO：列表（支持 limit/offset/tag/status/q/fav 服务端过滤）
     if (p === '/api/todos' && method === 'GET') {
-      return sendJson(res, 200, { todos: db.listTodos().map(toTodoDto) });
+      let rows = db.listTodos().map(toTodoDto);
+      const tag = url.searchParams.get('tag');
+      const status = url.searchParams.get('status');
+      const fav = url.searchParams.get('fav');
+      const q = (url.searchParams.get('q') || '').trim();
+      if (tag) rows = rows.filter((r) => (r.tags || []).includes(tag));
+      if (status) rows = rows.filter((r) => r.status === status);
+      if (fav === '1' || fav === 'true') rows = rows.filter((r) => (r.tags || []).includes(FAV_TAG));
+      if (q) rows = rows.filter((r) => String(r.content || '').includes(q));
+      rows = applyRange(rows, url.searchParams);
+      return sendJson(res, 200, { todos: rows });
     }
 
     // ---- TODO：新建
@@ -445,6 +479,12 @@ const server = http.createServer(async (req, res) => {
     if (td) {
       const id = decodeURIComponent(td[1]);
       if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
+
+      if (method === 'GET') {
+        const one = db.getTodo(id);
+        if (!one) return sendJson(res, 404, { error: 'not_found' });
+        return sendJson(res, 200, { todo: toTodoDto(one) });
+      }
 
       if (method === 'PATCH') {
         const body = await readBody(req);
