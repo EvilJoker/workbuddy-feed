@@ -508,8 +508,7 @@ server.listen(PORT, () => {
   console.log(`[memos-cloud] data: ${s.memos} memos / ${s.todos} todos / ${s.users} users`);
   console.log(`[memos-cloud] admin token: ${adminUser.token}`);
 
-  // COS 异地备份定时任务（配置见 .env：COS_*；密钥不进代码库）
+  // 可选：COS 异地备份定时任务（默认关闭；需要时在 .env 配置 COS_* 即启用）
   const cos = require('./src/cos_task').createCosTask({ DB_PATH: db.DB_PATH, db });
   if (cos.enabled()) cos.schedule();
-  else console.log('[cos-backup] 未配置 COS_*，异地备份关闭');
 });

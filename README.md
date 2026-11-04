@@ -121,7 +121,6 @@ WorkBuddy Feed 把「随手记」和「待办管理」放进同一个界面：
 - **数据**：本地 SQLite，WAL 模式，读写不互相阻塞；单文件，直接拷走就能换机器
 - **认证**：密码登录 + 无状态 HMAC 签名 cookie；`GET /api/auth?token=xxx` 支持免密登录链接
 - **备份**：`npm run backup` 用 `VACUUM INTO` 生成一致性快照到 `data/backups/`（服务运行中也能备份，默认保留 14 份）
-- **异地备份**：`GET /api/backup`（仅管理员）直接下载一致性快照；配合 `scripts/cos_backup.py` 可把快照自动上传到腾讯云 COS（`python3 scripts/cos_backup.py backup`，支持 backup / list / restore 子命令）
 
 > **为什么不用云数据库？** 踩过坑：CloudBase 的 PostgreSQL 共享实例按 **342 资源点/(核·小时)** 计费，5 分钟一个计量档，
 > 体验版每月 3,000 点只够 **约 17.5 小时"数据库有访问"的时长** —— 开发调试两天就烧完，实例随即被平台隔离、
