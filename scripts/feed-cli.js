@@ -86,7 +86,7 @@ const PASSWORD = fromKv('FEED_PASSWORD') || '';
 // ---------------------------------------------------------------- HTTP
 
 // 为什么不用 fetch：部分精简运行时的 undici 会因 WASM 内存限制失败，node:https 更稳
-function request(url, { method = 'GET', headers = {}, body } = {}) {
+function request(url, { method = 'GET', headers = {}, body, timeout = 25000 } = {}) {
   const u = new URL(url);
   const mod = u.protocol === 'http:' ? http : https;
   return new Promise((resolve, reject) => {
@@ -105,6 +105,10 @@ function request(url, { method = 'GET', headers = {}, body } = {}) {
         res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: data }));
       }
     );
+    // 必须设超时：托管网关偶发 ETIMEDOUT，没有超时会让整个调用挂住
+    req.setTimeout(timeout, () => {
+      req.destroy(new Error(`请求超时（${timeout}ms）：${method} ${u.pathname}`));
+    });
     req.on('error', reject);
     if (body) req.write(body);
     req.end();
@@ -145,17 +149,29 @@ async function login() {
   return COOKIE;
 }
 
-async function api(method, pathname, body) {
+async function api(method, pathname, body, attempt = 0) {
   const cookie = await login();
   const payload = body === undefined ? undefined : JSON.stringify(body);
-  const res = await request(withShare(pathname), {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      Cookie: cookie,
-    },
-    body: payload,
-  });
+  let res;
+  try {
+    res = await request(withShare(pathname), {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: cookie,
+      },
+      body: payload,
+    });
+  } catch (err) {
+    // 网络抖动 / 超时：自动重试 2 次（只对幂等风险低的写操作也重试，
+    // 因为同一 id 的重复 POST 会产生重复内容，所以 POST 不重试）
+    const canRetry = method !== 'POST';
+    if (attempt < 2 && canRetry) {
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      return api(method, pathname, body, attempt + 1);
+    }
+    die(`网络请求失败：${err && err.message ? err.message : String(err)}${canRetry ? '' : '（写操作不做自动重试，避免重复写入）'}`);
+  }
   let data = null;
   try { data = JSON.parse(res.text); } catch { /* 非 JSON */ }
   if (res.status >= 400) {
@@ -273,24 +289,32 @@ async function cmdList(args) {
 
 // 解析 id：支持完整 UUID，也支持 list 输出里的 8 位短 id。
 // 短 id 会被当作前缀匹配，先列出再定位（命中 0 个或多个都报明确错误）。
+// 未显式指定 --todo 时，memo 与 todo 都查，避免"忘了加 --todo 就找不到"。
+// 返回 { id, isTodo }：调用方据此决定用哪张表操作，
+// 这样 `update <短id> --status done` 不必再加 --todo。
 async function resolveId(id, isTodo) {
-  if (/^[0-9a-fA-F-]{36}$/.test(id)) return id;
-  const kind = isTodo ? 'todo' : 'memo';
-  const listKey = isTodo ? 'todos' : 'memos';
-  const res = await api('GET', (isTodo ? '/api/todos' : '/api/memos'));
-  const hits = (res[listKey] || []).filter((it) => String(it.id).startsWith(id));
-  if (hits.length === 1) return hits[0].id;
-  if (!hits.length) die(`没找到 id 以 ${id} 开头的${kind}（用 list 确认 id）`);
-  die(`短 id "${id}" 不唯一，匹配到 ${hits.length} 条，请补全 id`);
-  return '';
+  if (/^[0-9a-fA-F-]{36}$/.test(id)) return { id, isTodo };
+
+  const kinds = isTodo ? [['todo', '/api/todos', 'todos']] : [['memo', '/api/memos', 'memos']];
+  if (!isTodo) kinds.push(['todo', '/api/todos', 'todos']);
+
+  const checked = [];
+  for (const [kind, path, key] of kinds) {
+    const res = await api('GET', path);
+    const hits = (res[key] || []).filter((it) => String(it.id).startsWith(id));
+    if (hits.length === 1) return { id: hits[0].id, isTodo: kind === 'todo' };
+    if (hits.length > 1) die(`短 id "${id}" 在 ${kind} 中不唯一，匹配到 ${hits.length} 条，请补全 id`);
+    checked.push(kind);
+  }
+  die(`没找到 id 以 ${id} 开头的记录（已查 ${checked.join(' 和 ')}），用 list 确认 id`);
+  return { id, isTodo };
 }
 
 async function cmdGet(args) {
   const raw = args._[0];
   if (!raw) die('用法：feed-cli get <id>');
-  const isTodo = args.todo === true;
-  const id = await resolveId(raw, isTodo);
-  const res = await api('GET', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(id));
+  const r = await resolveId(raw, args.todo === true);
+  const res = await api('GET', (r.isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(r.id));
   const it = res.memo || res.todo || {};
   console.log(JSON.stringify(it, null, 2));
 }
@@ -298,43 +322,42 @@ async function cmdGet(args) {
 async function cmdUpdate(args) {
   const raw = args._[0];
   if (!raw) die('用法：feed-cli update <id> [--content "文本"] [--status doing] [--fav|--unfav] [--pin|--unpin]');
-  const isTodo = args.todo === true;
-  const id = await resolveId(raw, isTodo);
+  const r = await resolveId(raw, args.todo === true);
+  const isTodo = r.isTodo;
   const patch = {};
   const content = readContent(args);
   if (content) patch.content = content;
 
   if (args.status) {
-    if (!isTodo) die('--status 只适用于 todo（加 --todo）');
+    if (!isTodo) die('--status 只适用于 todo（这条是 memo）');
     patch.status = args.status;
   }
   if (args.fav || args.unfav) {
     // 收藏是 tags 里的固定标签，需要先读当前 tags 再整体覆盖
-    const cur = await api('GET', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(id));
+    const cur = await api('GET', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(r.id));
     const it = cur.memo || cur.todo || {};
     const tags = new Set(it.tags || []);
     if (args.fav) tags.add('收藏'); else tags.delete('收藏');
     patch.tags = [...tags];
   }
   if (args.pin !== undefined || args.unpin !== undefined) {
-    if (isTodo) die('--pin/--unpin 只适用于 memo');
+    if (isTodo) die('--pin/--unpin 只适用于 memo（这条是 todo）');
     patch.pinned = args.pin === true;
   }
   if (!Object.keys(patch).length) die('没有要改的内容：加 --content / --status / --fav / --unfav');
 
-  const res = await api('PATCH', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(id), patch);
+  const res = await api('PATCH', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(r.id), patch);
   const it = res.memo || res.todo || {};
-  console.log(`✓ 已更新 ${id.slice(0, 8)} ${(it.tags || []).map((t) => '#' + t).join(' ')}`.trim());
+  console.log(`✓ 已更新 ${r.id.slice(0, 8)} ${(it.tags || []).map((t) => '#' + t).join(' ')}`.trim());
   if (args.full && it.content) console.log(it.content);
 }
 
 async function cmdDelete(args) {
   const raw = args._[0];
   if (!raw) die('用法：feed-cli delete <id> [--todo]');
-  const isTodo = args.todo === true;
-  const id = await resolveId(raw, isTodo);
-  await api('DELETE', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(id));
-  console.log(`✓ 已删除 ${id.slice(0, 8)}`);
+  const r = await resolveId(raw, args.todo === true);
+  await api('DELETE', (r.isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(r.id));
+  console.log(`✓ 已删除 ${r.id.slice(0, 8)}`);
 }
 
 async function cmdSearch(args) {
