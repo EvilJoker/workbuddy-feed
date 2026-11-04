@@ -24,25 +24,51 @@ WorkBuddy Feed 就是给 Agent 用的**收件箱 + 布告栏**：Agent 干完活
 
 ## 🤖 Agent 主动推送
 
-仓库自带一个零依赖推送脚本 `scripts/push.js`，Agent 干完活一行命令就能汇报：
+仓库自带一个零依赖命令行客户端 `scripts/feed-cli.js`，Agent 干完活一行命令就能汇报，
+**增删改查全支持**，输出默认精简（只回一行 id），适合 Agent 反复调用：
 
 ```bash
-# 推一条日报到 Feed（FEED_TOKEN = 「成员」里创建的免密 token）
-FEED_BASE=https://your-app.example.com FEED_TOKEN=xxx \
-  node scripts/push.js --content "📊 今日工作日报 #日报
+# 新建动态（正文里的 #标签 会被自动解析）
+node scripts/feed-cli.js add "📊 今日工作日报 #日报
 - 完成：Feed 支持 ToDo 视图
 - 风险：CNB token 已过期"
 
-# 推一条待办（status: new / doing / done / dropped / expired）
-FEED_BASE=https://your-app.example.com FEED_TOKEN=xxx \
-  node scripts/push.js --type todo --status doing --content "跟进社区 PR #社区"
+# 新建待办（status: new / doing / done / dropped / expired）
+node scripts/feed-cli.js add "跟进社区 PR #社区" --todo --status doing
 
-# 也可以直接喂文件或管道（适合日报/长文）
-node scripts/push.js --file report.md
-cat report.md | node scripts/push.js --stdin
+# 查：列表（默认精简，每条一行）、按标签筛、全文搜索
+node scripts/feed-cli.js list --limit 5
+node scripts/feed-cli.js list --todo --status doing
+node scripts/feed-cli.js list --tag 日报 --full
+node scripts/feed-cli.js search 关键字
+
+# 改：改内容、改状态、加收藏星标、置顶
+node scripts/feed-cli.js update <id> --content "新内容"
+node scripts/feed-cli.js update <id> --todo --status done
+node scripts/feed-cli.js update <id> --fav
+
+# 删
+node scripts/feed-cli.js delete <id>
 ```
 
-> 用 WorkBuddy 应用托管时，网关要求每个请求都带分享码，加一个 `FEED_SHARECODE=<分享码>` 即可。
+`list` 输出的是 8 位短 id，可以直接用在 `get` / `update` / `delete` 上，脚本会自动解析。
+
+凭据通过环境变量传入（也支持 `FEED_KV_FILE` 指向一个 JSON 文件，或写进 `.env`）：
+
+```bash
+export FEED_BASE=https://your-app.example.com
+export FEED_TOKEN=<成员免密 token>
+export FEED_SHARECODE=<分享码>   # 托管网关要求每个请求都带
+node scripts/feed-cli.js add "hello #tag"
+```
+
+> 长正文用 `--file report.md` 或 `cat report.md | ... --stdin`，避免命令行转义问题。
+>
+> 只想推内容、不需要查改删，可以用更精简的 `scripts/push.js`：
+> ```bash
+> node scripts/push.js --content "📊 今日日报 #日报"
+> node scripts/push.js --type todo --status doing --content "跟进 PR #社区"
+> ```
 
 不想用脚本？它就是两个 HTTP 请求，任何语言都能接：
 
@@ -180,11 +206,11 @@ KEEP=30 npm run backup    # 保留 30 份
 | POST | `/api/login` | 密码登录，签发 cookie |
 | GET | `/api/auth?token=` | 成员免密登录 |
 | GET | `/api/me` | 当前身份 |
-| GET/POST | `/api/memos` | 列表 / 发布（自动解析 `#标签`） |
-| PATCH/DELETE | `/api/memos/:id` | 编辑（重解析标签、保留收藏）/ 删除 / 置顶 / 改标签 |
+| GET/POST | `/api/memos` | 列表 / 发布（自动解析 `#标签`）<br>列表支持服务端过滤：`?limit=&offset=&tag=&q=&fav=1` |
+| GET/PATCH/DELETE | `/api/memos/:id` | 单条查询 / 编辑（重解析标签、保留收藏）/ 删除 / 置顶 / 改标签 |
 | GET | `/api/memos/export` | 导出 JSON |
-| GET/POST | `/api/todos` | ToDo 列表 / 新增（可带 `status`） |
-| PATCH/DELETE | `/api/todos/:id` | 改状态 / 编辑 / 删除 |
+| GET/POST | `/api/todos` | ToDo 列表 / 新增（可带 `status`）<br>列表支持服务端过滤：`?limit=&offset=&tag=&status=&q=&fav=1` |
+| GET/PATCH/DELETE | `/api/todos/:id` | 单条查询 / 改状态 / 编辑 / 删除 |
 | GET/POST | `/api/users` | 成员管理（仅管理员） |
 
 ## 📁 目录结构
@@ -195,7 +221,8 @@ workbuddy-feed/
 ├── src/db.js            # SQLite 数据层：建表 + CRUD（node:sqlite）
 ├── public/index.html    # 单文件前端（原生 JS，无构建）
 ├── sql/schema.sql       # 建表 SQL（参考用，服务启动会自动建）
-├── scripts/push.js      # Agent 推送脚本（零依赖，支持 Feed / ToDo）
+├── scripts/feed-cli.js  # Agent 命令行客户端（增删改查，输出精简省 token）
+├── scripts/push.js      # Agent 精简推送脚本（只要写入时用）
 ├── scripts/backup.js    # 一致性备份（VACUUM INTO）
 ├── scripts/smoke.py     # 本地冒烟测试（21 项，覆盖 memos / todos / users）
 ├── scripts/import.js    # 从旧服务 JSON 导入历史数据

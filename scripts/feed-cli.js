@@ -271,19 +271,35 @@ async function cmdList(args) {
   printItems(isTodo ? res.todos || [] : res.memos || [], isTodo ? 'todo' : 'memo', args.full);
 }
 
+// 解析 id：支持完整 UUID，也支持 list 输出里的 8 位短 id。
+// 短 id 会被当作前缀匹配，先列出再定位（命中 0 个或多个都报明确错误）。
+async function resolveId(id, isTodo) {
+  if (/^[0-9a-fA-F-]{36}$/.test(id)) return id;
+  const kind = isTodo ? 'todo' : 'memo';
+  const listKey = isTodo ? 'todos' : 'memos';
+  const res = await api('GET', (isTodo ? '/api/todos' : '/api/memos'));
+  const hits = (res[listKey] || []).filter((it) => String(it.id).startsWith(id));
+  if (hits.length === 1) return hits[0].id;
+  if (!hits.length) die(`没找到 id 以 ${id} 开头的${kind}（用 list 确认 id）`);
+  die(`短 id "${id}" 不唯一，匹配到 ${hits.length} 条，请补全 id`);
+  return '';
+}
+
 async function cmdGet(args) {
-  const id = args._[0];
-  if (!id) die('用法：feed-cli get <id>');
+  const raw = args._[0];
+  if (!raw) die('用法：feed-cli get <id>');
   const isTodo = args.todo === true;
+  const id = await resolveId(raw, isTodo);
   const res = await api('GET', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(id));
   const it = res.memo || res.todo || {};
   console.log(JSON.stringify(it, null, 2));
 }
 
 async function cmdUpdate(args) {
-  const id = args._[0];
-  if (!id) die('用法：feed-cli update <id> [--content "文本"] [--status doing] [--fav|--unfav] [--pin|--unpin]');
+  const raw = args._[0];
+  if (!raw) die('用法：feed-cli update <id> [--content "文本"] [--status doing] [--fav|--unfav] [--pin|--unpin]');
   const isTodo = args.todo === true;
+  const id = await resolveId(raw, isTodo);
   const patch = {};
   const content = readContent(args);
   if (content) patch.content = content;
@@ -313,9 +329,10 @@ async function cmdUpdate(args) {
 }
 
 async function cmdDelete(args) {
-  const id = args._[0];
-  if (!id) die('用法：feed-cli delete <id> [--todo]');
+  const raw = args._[0];
+  if (!raw) die('用法：feed-cli delete <id> [--todo]');
   const isTodo = args.todo === true;
+  const id = await resolveId(raw, isTodo);
   await api('DELETE', (isTodo ? '/api/todos/' : '/api/memos/') + encodeURIComponent(id));
   console.log(`✓ 已删除 ${id.slice(0, 8)}`);
 }
