@@ -86,7 +86,7 @@ const PASSWORD = fromKv('FEED_PASSWORD') || '';
 // ---------------------------------------------------------------- HTTP
 
 // 为什么不用 fetch：部分精简运行时的 undici 会因 WASM 内存限制失败，node:https 更稳
-function request(url, { method = 'GET', headers = {}, body, timeout = 25000 } = {}) {
+function request(url, { method = 'GET', headers = {}, body, timeout = 40000 } = {}) {
   const u = new URL(url);
   const mod = u.protocol === 'http:' ? http : https;
   return new Promise((resolve, reject) => {
@@ -124,22 +124,31 @@ function withShare(pathname) {
 
 let COOKIE = '';
 
-/** 用 token 换会话 cookie；没有 token 就用密码登录。 */
-async function login() {
+/** 用 token 换会话 cookie；没有 token 就用密码登录。网络失败自动重试。 */
+async function login(attempt = 0) {
   if (COOKIE) return COOKIE;
   let res;
-  if (TOKEN) {
-    res = await request(withShare('/api/auth?token=' + encodeURIComponent(TOKEN)));
-    if (res.status >= 400) die(`token 认证失败（HTTP ${res.status}）：token 可能已失效，请检查 FEED_TOKEN`);
-  } else if (PASSWORD) {
-    res = await request(withShare('/api/login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: PASSWORD }),
-    });
-    if (res.status >= 400) die(`密码登录失败（HTTP ${res.status}）：检查 FEED_PASSWORD`);
-  } else {
-    die('缺少凭据：设置 FEED_TOKEN（推荐）或 FEED_PASSWORD，或在项目 .env 里配置');
+  try {
+    if (TOKEN) {
+      res = await request(withShare('/api/auth?token=' + encodeURIComponent(TOKEN)));
+      if (res.status >= 400) die(`token 认证失败（HTTP ${res.status}）：token 可能已失效，请检查 FEED_TOKEN`);
+    } else if (PASSWORD) {
+      res = await request(withShare('/api/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: PASSWORD }),
+      });
+      if (res.status >= 400) die(`密码登录失败（HTTP ${res.status}）：检查 FEED_PASSWORD`);
+    } else {
+      die('缺少凭据：设置 FEED_TOKEN（推荐）或 FEED_PASSWORD，或在项目 .env 里配置');
+    }
+  } catch (err) {
+    // 登录是 GET 语义，重试安全
+    if (attempt < 2) {
+      await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+      return login(attempt + 1);
+    }
+    die(`认证请求失败：${err && err.message ? err.message : String(err)}`);
   }
   // 注意：托管网关会下发多个 Set-Cookie（自己的 + 我们的），必须全部带上，
   // 只取第一条会 401
