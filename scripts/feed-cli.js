@@ -369,6 +369,73 @@ async function cmdDelete(args) {
   console.log(`✓ 已删除 ${r.id.slice(0, 8)}`);
 }
 
+// ---------------------------------------------------------------- 消息队列
+// 极简 MQ：一条消息 = 发送者 + 收件人 + 正文。收件人缺省 all（广播）。
+// 服务端只保留最近 1000 条，所以这是"传话"，不是归档。
+
+// 相对时间：30m / 2h / 3d；纯数字按毫秒（小于 1e12 当秒）；也接受 ISO 字符串
+function parseSince(v) {
+  if (!v) return 0;
+  const s = String(v).trim();
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*([smhd])$/i);
+  if (m) {
+    const unit = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2].toLowerCase()];
+    return Date.now() - parseFloat(m[1]) * unit;
+  }
+  const n = Number(s);
+  if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : 0;
+}
+
+async function cmdSend(args) {
+  const content = readContent(args, { positional: true });
+  if (!content) die('内容为空：feed-cli send "文本" [--to 收件人] [--from 发送者]');
+  const body = { content, to: args.to || 'all' };
+  if (args.from) body.from = args.from;
+  const res = await api('POST', '/api/messages', body);
+  const it = res.message || {};
+  console.log(`✓ msg ${String(it.id).slice(0, 8)} → ${it.recipient}（来自 ${it.sender}）`);
+}
+
+async function cmdInbox(args) {
+  const params = [];
+  if (args.to) params.push('to=' + encodeURIComponent(args.to));
+  const since = parseSince(args.since);
+  if (since) params.push('since=' + since);
+  if (args.limit) params.push('limit=' + encodeURIComponent(args.limit));
+  if (args.q) params.push('q=' + encodeURIComponent(args.q));
+  const res = await api('GET', '/api/messages' + (params.length ? '?' + params.join('&') : ''));
+  const list = res.messages || [];
+  if (!list.length) {
+    console.log('（暂无消息）');
+    return;
+  }
+  for (const it of list) {
+    const who = `${it.sender} → ${it.recipient}`;
+    if (args.full) {
+      console.log(`${it.id}\n  ${who} · ${fmtTime(it.createdTs)}\n  ${String(it.content).replace(/\n/g, '\n  ')}`);
+    } else {
+      console.log(`${String(it.id).slice(0, 8)}  ${fmtTime(it.createdTs)}  ${who}  ${oneLine(it.content, 50)}`);
+    }
+  }
+  console.log(`共 ${list.length} 条${res.limit ? `（队列上限 ${res.limit}）` : ''}`);
+}
+
+async function cmdMsgRm(args) {
+  const raw = args._[0];
+  if (!raw) die('用法：feed-cli msgrm <id>');
+  let id = raw;
+  if (!/^[0-9a-fA-F-]{36}$/.test(raw)) {
+    const res = await api('GET', '/api/messages?limit=1000');
+    const hits = (res.messages || []).filter((it) => String(it.id).startsWith(raw));
+    if (hits.length !== 1) die(`短 id "${raw}" 在消息里匹配到 ${hits.length} 条，用 inbox 确认 id`);
+    id = hits[0].id;
+  }
+  await api('DELETE', '/api/messages/' + encodeURIComponent(id));
+  console.log(`✓ 已删除消息 ${id.slice(0, 8)}`);
+}
+
 async function cmdSearch(args) {
   const q = (args._[0] || args.q || '').trim();
   if (!q) die('用法：feed-cli search <关键字>');
@@ -394,6 +461,9 @@ const HELP = `feed-cli —— WorkBuddy Feed / ToDo 命令行客户端
   update <id>             修改（--content / --status / --fav / --unfav / --pin / --unpin）
   delete <id>             删除
   search <关键字>         搜索 memo + todo
+  send <文本>             发消息给其他 agent（--to 收件人，默认 all；--from 覆盖发送者）
+  inbox                   收消息（--to 我 / --since 30m / --limit / --q / --full）
+  msgrm <id>              删消息
   health                  服务与存储状态
 
 配置：FEED_BASE / FEED_TOKEN / FEED_SHARECODE（或 FEED_PASSWORD），也可写在项目 .env
@@ -413,6 +483,9 @@ async function main() {
     case 'update': case 'edit': return cmdUpdate(args);
     case 'delete': case 'rm': return cmdDelete(args);
     case 'search': case 'find': return cmdSearch(args);
+    case 'send': case 'msg': return cmdSend(args);
+    case 'inbox': return cmdInbox(args);
+    case 'msgrm': return cmdMsgRm(args);
     case 'health': return cmdHealth();
     default: die(`未知命令：${cmd}\n\n${HELP}`);
   }

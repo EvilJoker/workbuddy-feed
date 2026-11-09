@@ -97,6 +97,25 @@ function toTodoDto(row) {
   return { ...t, status: TODO_STATUS.includes(row.status) ? row.status : 'new' };
 }
 
+// DB 行 -> 消息契约（消息只有"谁发给谁"，没有状态/标签）
+function toMsgDto(row) {
+  const created = Date.parse(row.created_at);
+  return {
+    id: row.id,
+    content: row.content,
+    sender: row.sender,
+    recipient: row.recipient || 'all',
+    createdTs: Number.isFinite(created) ? created : Date.now(),
+  };
+}
+
+// 名字（发送者 / 收件人）：去掉空白、最长 24 字，'all' 表示广播
+function cleanName(v, fallback = '') {
+  if (typeof v !== 'string') return fallback;
+  const s = v.replace(/\s+/g, '').slice(0, 24);
+  return s || fallback;
+}
+
 // ---------------------------------------------------------------- 会话（无状态 HMAC cookie）
 function sign(payload) {
   return crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
@@ -363,6 +382,58 @@ const server = http.createServer(async (req, res) => {
       return res.end(body);
     }
 
+    // ---- 消息队列：agent 之间点对点 / 广播通信
+    // 队列只保留最近 1000 条（插入时自动裁掉最老的），不提供编辑，只有发 / 收 / 删。
+    if (p === '/api/messages' && method === 'GET') {
+      const to = cleanName(url.searchParams.get('to'));
+      const since = Number(url.searchParams.get('since') || 0);
+      const q = (url.searchParams.get('q') || '').trim();
+      let rows = db.listMessages().map(toMsgDto);
+      // ?to=xxx → 只看「发给 xxx」和「广播给所有人」的
+      if (to) rows = rows.filter((r) => r.recipient === to || r.recipient === 'all');
+      // ?since=<毫秒时间戳> → 增量拉取，agent 轮询用
+      if (Number.isFinite(since) && since > 0) rows = rows.filter((r) => r.createdTs > since);
+      if (q) rows = rows.filter((r) => String(r.content).includes(q));
+      rows = applyRange(rows, url.searchParams);
+      return sendJson(res, 200, { messages: rows, limit: db.MESSAGE_LIMIT });
+    }
+
+    if (p === '/api/messages' && method === 'POST') {
+      const s = getSession(req);
+      const body = await readBody(req);
+      const content = typeof body.content === 'string' ? body.content.trim() : '';
+      if (!content) return sendJson(res, 400, { error: 'empty' });
+      if (content.length > 8000) return sendJson(res, 413, { error: 'too_long' });
+      // 发送者默认取登录身份，允许 body.from 覆盖（多台终端共用一个成员 token 时区分 agent）
+      const sender = cleanName(body.from, s.name);
+      const recipient = cleanName(body.to, 'all');
+      const created = db.createMessage({ content, sender, recipient });
+      return sendJson(res, 201, { message: toMsgDto(created) });
+    }
+
+    const mm = p.match(/^\/api\/messages\/([^/]+)$/);
+    if (mm) {
+      const s = getSession(req);
+      const id = decodeURIComponent(mm[1]);
+      if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
+
+      if (method === 'GET') {
+        const one = db.getMessage(id);
+        if (!one) return sendJson(res, 404, { error: 'not_found' });
+        return sendJson(res, 200, { message: toMsgDto(one) });
+      }
+
+      if (method === 'DELETE') {
+        const one = db.getMessage(id);
+        if (!one) return sendJson(res, 404, { error: 'not_found' });
+        if (s.role !== 'admin' && one.sender !== s.name) return sendJson(res, 403, { error: 'forbidden' });
+        db.deleteMessage(id);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      return sendJson(res, 405, { error: 'method_not_allowed' });
+    }
+
     // ---- 列表（支持 limit/offset/tag/status/q/fav 服务端过滤，缺省返回全部）
     if (p === '/api/memos' && method === 'GET') {
       let rows = db.listMemos().map(toDto);
@@ -545,7 +616,7 @@ server.listen(PORT, () => {
   console.log(`[memos-cloud] listening on :${PORT}`);
   console.log(`[memos-cloud] storage: sqlite ${db.DB_PATH}`);
   const s = db.stats();
-  console.log(`[memos-cloud] data: ${s.memos} memos / ${s.todos} todos / ${s.users} users`);
+  console.log(`[memos-cloud] data: ${s.memos} memos / ${s.todos} todos / ${s.messages} messages / ${s.users} users`);
   console.log(`[memos-cloud] admin token: ${adminUser.token}`);
 
   // 可选：COS 异地备份定时任务（默认关闭；需要时在 .env 配置 COS_* 即启用）

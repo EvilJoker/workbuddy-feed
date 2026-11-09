@@ -39,3 +39,14 @@ CREATE TABLE IF NOT EXISTS users (
   token       TEXT NOT NULL UNIQUE,
   created_at  TEXT NOT NULL
 );
+
+-- 消息队列：agent 之间点对点 / 广播通信，只保留最近 1000 条（插入时裁剪最老的）
+CREATE TABLE IF NOT EXISTS messages (
+  id          TEXT PRIMARY KEY,
+  content     TEXT NOT NULL,
+  sender      TEXT NOT NULL,
+  recipient   TEXT NOT NULL DEFAULT 'all',       -- 'all' = 广播，否则成员/agent 名字
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_created_idx   ON messages (created_at DESC);
+CREATE INDEX IF NOT EXISTS messages_recipient_idx ON messages (recipient, created_at DESC);

@@ -75,6 +75,18 @@ db.exec(`
     token       TEXT NOT NULL UNIQUE,          -- 免密登录用的专属 token
     created_at  TEXT NOT NULL
   );
+
+  -- 消息队列：agent 之间点对点 / 广播通信。
+  -- 只保留最近 MESSAGE_LIMIT 条（插入后裁剪，环形缓冲），不做历史归档。
+  CREATE TABLE IF NOT EXISTS messages (
+    id          TEXT PRIMARY KEY,
+    content     TEXT NOT NULL,
+    sender      TEXT NOT NULL,
+    recipient   TEXT NOT NULL DEFAULT 'all',   -- 'all' 或成员名
+    created_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS messages_created_idx   ON messages (created_at DESC);
+  CREATE INDEX IF NOT EXISTS messages_recipient_idx ON messages (recipient, created_at DESC);
 `);
 
 const nowIso = () => new Date().toISOString();
@@ -186,6 +198,47 @@ function deleteTodo(id) {
   return db.prepare(`DELETE FROM todos WHERE id = ?`).run(id).changes > 0;
 }
 
+// ------------------------------------------------------------------ messages
+// 极简消息队列：只存最近 1000 条，超了从最老的开始丢（环形缓冲语义）。
+const MESSAGE_LIMIT = 1000;
+
+const stmtMessages = db.prepare(
+  `SELECT id, content, sender, recipient, created_at
+     FROM messages ORDER BY created_at DESC, rowid DESC`
+);
+const stmtMessageById = db.prepare(`SELECT * FROM messages WHERE id = ?`);
+const stmtMessageInsert = db.prepare(
+  `INSERT INTO messages (id, content, sender, recipient, created_at) VALUES (?, ?, ?, ?, ?)`
+);
+
+function trimMessages() {
+  const n = db.prepare(`SELECT COUNT(*) AS n FROM messages`).get().n;
+  const over = n - MESSAGE_LIMIT;
+  if (over <= 0) return 0;
+  // rowid 顺序 = 写入顺序（id 是 uuid，不能拿来排序）
+  db.prepare(`DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid ASC LIMIT ?)`).run(over);
+  return over;
+}
+
+function listMessages() {
+  return stmtMessages.all();
+}
+
+function createMessage({ content, sender, recipient = 'all' }) {
+  const id = uuid();
+  stmtMessageInsert.run(id, content, sender, recipient, nowIso());
+  trimMessages();
+  return stmtMessageById.get(id);
+}
+
+function getMessage(id) {
+  return stmtMessageById.get(id) || null;
+}
+
+function deleteMessage(id) {
+  return db.prepare(`DELETE FROM messages WHERE id = ?`).run(id).changes > 0;
+}
+
 // ------------------------------------------------------------------ users
 const stmtUserByToken = db.prepare(`SELECT id, name, role, token, created_at FROM users WHERE token = ?`);
 const stmtUserByName = db.prepare(`SELECT id, name, role FROM users WHERE name = ?`);
@@ -243,6 +296,7 @@ function stats() {
   return {
     memos: db.prepare(`SELECT COUNT(*) AS n FROM memos`).get().n,
     todos: db.prepare(`SELECT COUNT(*) AS n FROM todos`).get().n,
+    messages: db.prepare(`SELECT COUNT(*) AS n FROM messages`).get().n,
     users: db.prepare(`SELECT COUNT(*) AS n FROM users`).get().n,
   };
 }
@@ -250,6 +304,7 @@ function stats() {
 module.exports = {
   DB_PATH,
   db,
+  MESSAGE_LIMIT,
   listMemos,
   createMemo,
   getMemo,
@@ -260,6 +315,10 @@ module.exports = {
   getTodo,
   updateTodo,
   deleteTodo,
+  listMessages,
+  createMessage,
+  getMessage,
+  deleteMessage,
   findUserByToken,
   findUserByName,
   findUserById,

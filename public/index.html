@@ -143,6 +143,13 @@
   .memo.st-expired { border-left: 3px solid #e8a0a0; background: #fffbfa; }
   .memo .actions select { border: 1px solid var(--border); background: var(--card); border-radius: 7px; padding: 2px 6px; font-size: 12px; color: var(--text); cursor: pointer; }
 
+  /* 消息视图：收件人输入 + 卡片头 */
+  .composer .tools input.rcpt { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 4px 8px; font-size: 13px; width: 132px; color: var(--text); }
+  .who-arrow { color: var(--muted); }
+  .msgcard .content { font-size: 15px; }
+  .tochip { background: #f1f3f6; color: #444c56; border-radius: 6px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
+  .tochip.all { background: #e8f0fe; color: #1a5cc8; }
+
   /* mobile */
   @media (max-width: 480px) {
     .wrap { padding: 12px 10px 70px; }
@@ -161,7 +168,7 @@
 
 <div id="login">
   <h1>📒 WorkBuddy Feed</h1>
-  <p>团队信息流 · 输入访问密码（成员请用专属链接进入）</p>
+  <p>团队信息流 · ToDo · 消息队列（成员请用专属链接进入）</p>
   <div class="err" id="loginErr"></div>
   <input type="password" id="pwd" placeholder="访问密码" onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">进入</button>
@@ -170,7 +177,7 @@
 <div id="app" style="display:none">
   <div class="wrap">
     <header>
-      <div class="logo" id="logoBtn" onclick="toggleView()" title="点击切换 Feed / ToDo">📒 <span class="brand-long">WorkBuddy </span><span id="logoName">Feed</span></div>
+      <div class="logo" id="logoBtn" onclick="toggleView()" title="点击切换 Feed / ToDo / 消息">📒 <span class="brand-long">WorkBuddy </span><span id="logoName">Feed</span></div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="who" id="who"></span>
         <button id="refreshBtn" class="iconbtn" onclick="manualRefresh()" title="刷新（每 60 秒自动刷新）">🔄</button>
@@ -190,6 +197,7 @@
           <option value="dropped">废弃</option>
           <option value="expired">过期</option>
         </select>
+        <input id="newRecipient" class="rcpt" style="display:none" maxlength="24" placeholder="收件人（默认 all）" title="留空 = 广播给 all">
         <button type="button" onclick="togglePop('emojiPop', event)" title="插入表情">😀</button>
         <button type="button" class="tagbtn" onclick="togglePop('tagPop', event)" title="选择或新建标签"># 标签</button>
         <div class="pop" id="emojiPop">
@@ -220,6 +228,7 @@
         <option value="expired">过期</option>
       </select>
       <select id="tagFilter" onchange="onFilterChange()"><option value="">全部标签</option></select>
+      <select id="recipientFilter" style="display:none" onchange="onFilterChange()"><option value="">全部收件人</option></select>
       <select id="sortSel" onchange="onFilterChange()">
         <option value="new">最新优先</option>
         <option value="old">最早优先</option>
@@ -250,7 +259,8 @@
 <script>
 let memos = [];
 let todos = [];
-let view = 'feed'; // 'feed' | 'todo'（点左上角 Logo 切换）
+let msgs = [];
+let view = 'feed'; // 'feed' | 'todo' | 'msg'（点左上角 Logo 循环切换）
 let editingId = null;
 let me = { name: '', role: '' };
 
@@ -262,9 +272,9 @@ let page = 1;
 let favOnly = false;
 const openIds = new Set();
 
-const apiBase = () => (view === 'todo' ? '/api/todos' : '/api/memos');
-const items = () => (view === 'todo' ? todos : memos);
-const noun = () => (view === 'todo' ? 'ToDo' : 'memo');
+const apiBase = () => (view === 'todo' ? '/api/todos' : view === 'msg' ? '/api/messages' : '/api/memos');
+const items = () => (view === 'todo' ? todos : view === 'msg' ? msgs : memos);
+const noun = () => (view === 'todo' ? 'ToDo' : view === 'msg' ? '消息' : 'memo');
 
 async function api(path, opts) {
   opts = opts || {};
@@ -295,29 +305,51 @@ async function init() {
   startAutoRefresh();
 }
 
-// ---- 视图切换：点左上角 Logo 在 Feed / TODO 之间切换 ----
+// ---- 视图切换：点左上角 Logo 在 Feed → ToDo → 消息 之间循环 ----
+const VIEWS = ['feed', 'todo', 'msg'];
+const VIEW_META = {
+  feed: { name: 'Feed', icon: '📒', title: 'WorkBuddy Feed' },
+  todo: { name: 'ToDo', icon: '✅', title: 'WorkBuddy ToDo' },
+  msg:  { name: '消息', icon: '💬', title: 'WorkBuddy Messages' },
+};
+
 function toggleView() {
-  view = view === 'feed' ? 'todo' : 'feed';
-  document.getElementById('logoName').textContent = view === 'todo' ? 'ToDo' : 'Feed';
-  document.getElementById('logoBtn').childNodes[0].textContent = view === 'todo' ? '✅ ' : '📒 ';
-  document.title = view === 'todo' ? 'WorkBuddy ToDo' : 'WorkBuddy Feed';
+  view = VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length];
+  applyView();
+}
+
+function applyView() {
+  const meta = VIEW_META[view];
+  document.getElementById('logoName').textContent = meta.name;
+  document.getElementById('logoBtn').childNodes[0].textContent = meta.icon + ' ';
+  document.title = meta.title;
   // 切视图时重置筛选，避免上一版的条件串味
   document.getElementById('q').value = '';
   document.getElementById('statusFilter').value = '';
   document.getElementById('statusFilter').style.display = view === 'todo' ? '' : 'none';
   document.getElementById('newStatus').style.display = view === 'todo' ? '' : 'none';
   document.getElementById('newStatus').value = 'new';
+  document.getElementById('tagFilter').style.display = view === 'msg' ? 'none' : '';
+  document.getElementById('recipientFilter').style.display = view === 'msg' ? '' : 'none';
+  document.getElementById('recipientFilter').value = '';
+  document.getElementById('newRecipient').style.display = view === 'msg' ? '' : 'none';
+  document.getElementById('newRecipient').value = '';
   document.getElementById('exportBtn').style.display = view === 'feed' ? '' : 'none';
+  document.getElementById('favBtn').style.display = view === 'msg' ? 'none' : '';
   if (favOnly) { favOnly = false; document.getElementById('favBtn').classList.remove('on'); }
   page = 1;
   editingId = null;
   document.getElementById('input').placeholder = view === 'todo'
     ? '添加一条 ToDo… 支持 #标签 `代码` **加粗** 和链接'
-    : '记录此刻的想法… 支持 #标签 `代码` **加粗** 和链接';
-  document.getElementById('postBtn').textContent = view === 'todo' ? '添加' : '记录';
-  document.getElementById('composerHint').textContent = view === 'todo'
-    ? '表情 · #标签 · 状态随时可改 · Ctrl+Enter 添加'
-    : '表情 · #标签 均可搜索 · Ctrl+Enter 发送';
+    : view === 'msg'
+      ? '发消息给其他 agent… 收件人留空就是广播'
+      : '记录此刻的想法… 支持 #标签 `代码` **加粗** 和链接';
+  document.getElementById('postBtn').textContent = view === 'todo' ? '添加' : view === 'msg' ? '发送' : '记录';
+  document.getElementById('composerHint').textContent = view === 'msg'
+    ? '左侧填收件人（默认 all）· Ctrl+Enter 发送'
+    : view === 'todo'
+      ? '表情 · #标签 · 状态随时可改 · Ctrl+Enter 添加'
+      : '表情 · #标签 均可搜索 · Ctrl+Enter 发送';
   loadItems();
 }
 
@@ -334,12 +366,19 @@ let refreshing = false;
 
 // 用来判断数据有没有变（避免无变化时重绘、打断滚动/选中）
 function snapshot() {
-  return items().map(m => `${m.id}:${m.updatedTs}:${m.status || ''}:${m.pinned ? 1 : 0}`).join('|');
+  return items().map(m => `${m.id}:${m.updatedTs || m.createdTs}:${m.status || ''}:${m.pinned ? 1 : 0}`).join('|');
+}
+
+// 把接口返回塞进对应数组（三种视图字段名不同）
+function assignData(d) {
+  if (view === 'todo') todos = d.todos || [];
+  else if (view === 'msg') msgs = d.messages || [];
+  else memos = d.memos || [];
 }
 
 async function loadItems() {
   const d = await api(apiBase());
-  if (view === 'todo') { todos = d.todos; } else { memos = d.memos; }
+  assignData(d);
   lastRefresh = Date.now();
   render();
 }
@@ -373,7 +412,7 @@ async function refreshItems(manual) {
   let err = '';
   try {
     const d = await api(apiBase());
-    if (view === 'todo') { todos = d.todos; } else { memos = d.memos; }
+    assignData(d);
     lastRefresh = Date.now();
     if (snapshot() !== before) { render(); } else { updateFresh(); }
   } catch (e) {
@@ -460,8 +499,10 @@ async function post() {
   if (!el.value.trim()) return;
   const body = { content: el.value };
   if (view === 'todo') body.status = document.getElementById('newStatus').value || 'new';
+  if (view === 'msg') body.to = document.getElementById('newRecipient').value.trim() || 'all';
   await api(apiBase(), { method: 'POST', body: JSON.stringify(body) });
   el.value = '';
+  if (view === 'msg') document.getElementById('newRecipient').value = '';
   page = 1;
   await loadItems();
 }
@@ -473,6 +514,10 @@ function esc(s) {
        .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
        .replace(/(^|\s)(#[^\s<]+)/g, '$1<span class="tag" onclick="filterTag(\'$2\')">$2</span>');
   return h.replace(/\n/g, '<br>');
+}
+
+function esc0(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function fmt(ts) {
@@ -583,15 +628,25 @@ function render() {
   const sort = document.getElementById('sortSel').value;
   const src = items();
   let list = src.slice();
-  if (q) list = list.filter(m => m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q)));
+  if (q) list = list.filter(m => String(m.content).toLowerCase().includes(q) || (m.tags || []).some(t => t.toLowerCase().includes(q)));
 
-  // tag filter options
-  const tags = [...new Set(src.flatMap(m => m.tags))].sort();
+  // tag filter options（消息视图没有标签）
+  const tags = view === 'msg' ? [] : [...new Set(src.flatMap(m => m.tags || []))].sort();
   const sel = document.getElementById('tagFilter');
   const cur = sel.value;
   sel.innerHTML = '<option value="">全部标签</option>' + tags.map(t => `<option ${t===cur?'selected':''}>${t}</option>`).join('');
   const tf = sel.value;
-  if (tf) list = list.filter(m => m.tags.includes(tf));
+  if (tf) list = list.filter(m => (m.tags || []).includes(tf));
+
+  // 收件人筛选（仅消息视图）
+  if (view === 'msg') {
+    const rsel = document.getElementById('recipientFilter');
+    const rcur = rsel.value;
+    const rcpts = [...new Set(src.map(m => m.recipient || 'all'))].sort();
+    rsel.innerHTML = '<option value="">全部收件人</option>' +
+      rcpts.map(r => `<option ${r===rcur?'selected':''}>${r}</option>`).join('');
+    if (rsel.value) list = list.filter(m => (m.recipient || 'all') === rsel.value);
+  }
 
   let sf = '';
   if (view === 'todo') {
@@ -613,7 +668,7 @@ function render() {
   const total = src.length;
   const favCount = src.filter(isFav).length;
   let ct = total ? `共 ${total} 条 ${noun()}` : '';
-  if (q || tf || favOnly || sf) ct += ` · 筛选出 ${list.length} 条`;
+  if (q || tf || favOnly || sf || (view === 'msg' && document.getElementById('recipientFilter').value)) ct += ` · 筛选出 ${list.length} 条`;
   if (pages > 1) ct += ` · 第 ${page}/${pages} 页`;
   if (favCount) ct += ` · ⭐ ${favCount}`;
   document.getElementById('countText').textContent = ct;
@@ -624,12 +679,14 @@ function render() {
     let msg;
     if (favOnly) msg = `还没有收藏，点 ${noun()} 右侧的 ☆ 就能收藏 ⭐`;
     else if (q || tf || sf) msg = '没有匹配的记录';
-    else msg = view === 'todo' ? '还没有 ToDo，添加一条吧 ✅' : '还没有记录，写下第一条吧 ✍️';
+    else msg = view === 'todo' ? '还没有 ToDo，添加一条吧 ✅'
+      : view === 'msg' ? '还没有消息，发第一条吧 💬'
+      : '还没有记录，写下第一条吧 ✍️';
     box.innerHTML = `<div class="empty">${msg}</div>`;
     document.getElementById('pager').innerHTML = '';
     return;
   }
-  box.innerHTML = pageList.map(m => view === 'todo' ? todoCardHtml(m) : memoCardHtml(m)).join('');
+  box.innerHTML = pageList.map(m => view === 'todo' ? todoCardHtml(m) : view === 'msg' ? msgCardHtml(m) : memoCardHtml(m)).join('');
 
   renderPager(list.length, pages);
   requestAnimationFrame(syncExpandHints);
@@ -694,6 +751,46 @@ function todoCardHtml(m) {
       <span onclick="del('${m.id}')">删除</span>
     </div>
   </div>`;
+}
+
+// 消息卡片（消息视图）：发送者 → 收件人 + 时间 + 正文
+function msgCardHtml(m) {
+  const open = openIds.has(m.id);
+  const to = m.recipient || 'all';
+  const toHtml = to === 'all'
+    ? '<span class="tochip all">📢 all</span>'
+    : `<span class="tochip">${esc0(to)}</span>`;
+  return `<div class="memo msgcard ${open?'open':''}" onclick="onCardClick(event,'${m.id}')">
+    <div class="meta">
+      <span><span class="who">👤 ${esc0(m.sender)}</span><span class="who-arrow"> → </span>${toHtml} · ${fmt(m.createdTs)}</span>
+    </div>
+    <div class="content">${esc(m.content)}</div>
+    <div class="actions">
+      <span class="expand-hint" onclick="toggleOpen('${m.id}', event)">${open ? '收起 ▴' : '展开 ▾'}</span>
+      <span onclick="event.stopPropagation();copyMsg('${m.id}')">复制内容</span>
+      <span onclick="event.stopPropagation();del('${m.id}')">删除</span>
+    </div>
+  </div>`;
+}
+
+async function copyMsg(id) {
+  const m = msgs.find(x => x.id === id);
+  if (!m) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(m.content);
+    } else {
+      const t = document.createElement('textarea');
+      t.value = m.content;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand('copy');
+      t.remove();
+    }
+    updateFresh('已复制消息内容 ✓');
+  } catch (e) {
+    updateFresh('复制失败，请手动选中');
+  }
 }
 
 // 编辑中的卡片（Feed / TODO 共用）

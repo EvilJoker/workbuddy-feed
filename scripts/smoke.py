@@ -4,6 +4,8 @@
 """
 import json
 import sys
+import time
+import urllib.parse
 import urllib.request
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:8097'
@@ -110,16 +112,43 @@ check('成员列表含管理员与新成员', st == 200 and '管理员' in names
 st, r = call('DELETE', f"/api/users/{user.get('id')}")
 check('删除成员', st == 200 and r.get('ok'), r)
 
-print('5) 删除 + 鉴权')
+print('5) 消息队列')
+st, r = call('POST', '/api/messages', {'content': '给 B 的指令', 'to': '冒烟收件人', 'from': '冒烟发送者'})
+msg = r.get('message', {})
+check('发消息（点对点）', st == 201 and msg.get('recipient') == '冒烟收件人' and msg.get('sender') == '冒烟发送者', r)
+st, r = call('POST', '/api/messages', {'content': '全体广播'})
+mid_all = r.get('message', {}).get('id', '')
+check('收件人缺省 all + 发送者取登录身份',
+      st == 201 and r.get('message', {}).get('recipient') == 'all' and r.get('message', {}).get('sender') == '管理员', r)
+
+st, r = call('GET', '/api/messages?to=' + urllib.parse.quote('冒烟收件人'))
+check('?to= 命中自己的 + 广播', st == 200 and len(r.get('messages', [])) == 2, r)
+st, r = call('GET', '/api/messages?to=' + urllib.parse.quote('路人甲'))
+check('?to= 别人只看得到广播', st == 200 and len(r.get('messages', [])) == 1, r)
+st, r = call('GET', '/api/messages?since=' + str(int(time.time() * 1000) + 60000))
+check('since=未来 命中 0 条', st == 200 and len(r.get('messages', [])) == 0, r)
+st, r = call('GET', '/api/messages?q=' + urllib.parse.quote('指令'))
+check('消息全文搜索', st == 200 and len(r.get('messages', [])) == 1, r)
+
+st, r = call('POST', '/api/messages', {'content': '   '})
+check('空消息被拒 400', st == 400, f'{st} {r}')
+
+st, r = call('DELETE', '/api/messages/' + msg.get('id', ''))
+check('删除消息', st == 200 and r.get('ok'), r)
+st, r = call('GET', '/api/health')
+check('health 带 messages 计数', r.get('messages') == 1, r)
+
+print('6) 删除 + 鉴权')
 st, r = call('DELETE', f'/api/memos/{mid}')
 check('删除 memo', st == 200, r)
 st, r = call('DELETE', f'/api/todos/{tid}')
 check('删除 todo', st == 200, r)
+st, r = call('DELETE', f'/api/messages/{mid_all}')
 COOKIE['v'] = ''
 st, r = call('GET', '/api/memos')
 check('未登录访问被拒 401', st == 401, f'{st} {r}')
 
 st, r = call('GET', '/api/health')
-check('健康检查统计', st == 200 and r.get('memos') == 0 and r.get('todos') == 0, r)
+check('健康检查统计', st == 200 and r.get('memos') == 0 and r.get('todos') == 0 and r.get('messages') == 0, r)
 print(f'\n结果: {ok} 通过 / {fail} 失败')
 sys.exit(1 if fail else 0)

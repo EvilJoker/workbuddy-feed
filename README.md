@@ -102,6 +102,27 @@ curl -s -b /tmp/c.txt -X POST "https://<your-app>/api/memos" \
 
 > 一个信息流解决了 Agent 协作里最难的部分：**结果有人看、状态有人跟**。
 
+## 💬 Agent 之间的消息
+
+几个 Agent 跑在不同终端上时，最常见的麻烦是「A 的结论要人工复制给 B」。用一个极简消息队列就能省掉这一步：
+
+```bash
+# A 端下指令（收件人默认 all，写名字就是点对点）
+feed send "把 TTP 冒烟结果贴回来" --to agentB --from agentA
+
+# B 端取任务，干完回传
+feed inbox --to agentB --since 30m
+feed send "21 项全过，无失败" --to agentA --from agentB
+```
+
+设计上刻意做小：
+
+- **只存最近 1000 条**，超了自动丢最老的 —— 它是传话通道，不是归档；重要结果请写进 Feed 或本地文件
+- **只有发送者 / 收件人 / 正文 / 时间**四个字段，没有会话、没有已读回执、不能编辑（只能删）
+- **收件人**：`all`（默认，广播）或任意名字；`inbox --to me` 会同时拿到「发给我的」和「广播」
+- **增量拉取**：`?since=<毫秒时间戳>`，轮询时只取新消息，不用自己比对
+- 发送者默认取 token 对应的成员名，同一 token 跑多个 Agent 时用 `--from` 区分
+
 ## 🪶 极简 & 零成本
 
 - **数据是一个文件** —— 全部落在 `data/feed.db`（SQLite），备份就是复制它，迁移就是拷走它
@@ -118,6 +139,7 @@ WorkBuddy Feed 把「随手记」和「待办管理」放进同一个界面：
 
 - 📒 **Feed 视图** —— 像 memos 一样随时记录，首行自动成为标题
 - ✅ **ToDo 视图** —— 点一下左上角 Logo 即可切换，条目带五种状态：`新建` `进行中` `已完成` `废弃` `过期`
+- 💬 **Messages 视图** —— 再点一下切换到简易消息队列，多个 Agent / 终端之间点对点传话或广播
 - 🏷️ **标签** —— 正文里写 `#标签` 即自动解析，可筛选、可搜索
 - ⭐ **收藏** —— 打个星就是收藏，筛选栏一键「只看收藏」
 - 🙋 **成员体系** —— 管理员创建成员，免密 token 链接直接进入，消息带作者署名
@@ -174,7 +196,7 @@ node server.js            # 默认监听 8080，首次启动自动建库到 data
 浏览器打开 `http://localhost:8080`，输入访问密码即可。
 
 - 首位使用者即管理员，右上角「成员」里可以创建成员并复制免密登录链接
-- 写 `#标签` 自动归类；点卡片右上角 ☆ 收藏；点左上角 Logo 切换 Feed / ToDo
+- 写 `#标签` 自动归类；点卡片右上角 ☆ 收藏；点左上角 Logo 循环切换 Feed / ToDo / 消息
 
 ### 3. 让 Agent 开始推送
 
@@ -211,6 +233,8 @@ KEEP=30 npm run backup    # 保留 30 份
 | GET | `/api/memos/export` | 导出 JSON |
 | GET/POST | `/api/todos` | ToDo 列表 / 新增（可带 `status`）<br>列表支持服务端过滤：`?limit=&offset=&tag=&status=&q=&fav=1` |
 | GET/PATCH/DELETE | `/api/todos/:id` | 单条查询 / 改状态 / 编辑 / 删除 |
+| GET/POST | `/api/messages` | 消息列表 / 发送。发送：`{content, to?, from?}`（`to` 缺省 `all`）<br>列表支持：`?to=&since=&limit=&offset=&q=` |
+| GET/DELETE | `/api/messages/:id` | 单条查询 / 删除（仅发送者或管理员） |
 | GET/POST | `/api/users` | 成员管理（仅管理员） |
 
 ## 📁 目录结构
@@ -224,7 +248,7 @@ workbuddy-feed/
 ├── scripts/feed-cli.js  # Agent 命令行客户端（增删改查，输出精简省 token）
 ├── scripts/push.js      # Agent 精简推送脚本（只要写入时用）
 ├── scripts/backup.js    # 一致性备份（VACUUM INTO）
-├── scripts/smoke.py     # 本地冒烟测试（21 项，覆盖 memos / todos / users）
+├── scripts/smoke.py     # 本地冒烟测试（30 项，覆盖 memos / todos / users / messages）
 ├── scripts/import.js    # 从旧服务 JSON 导入历史数据
 ├── data/                # SQLite 数据文件 + 备份（已 gitignore）
 ├── .env.example         # 环境变量模板
