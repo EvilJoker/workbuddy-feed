@@ -43,6 +43,7 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch {}
 const PORT = Number(process.env.PORT || 8080);
 
 const db = require('./src/db');
+const vault = require('./src/vault');
 
 // TODO 状态：新建 / 进行中 / 已完成 / 废弃 / 过期
 const TODO_STATUS = ['new', 'doing', 'done', 'dropped', 'expired'];
@@ -225,6 +226,28 @@ function readBody(req, limit = 1024 * 256) {
   });
 }
 
+// 原始二进制 body（应急文件柜上传用）：不做 JSON 解析，只做大小上限保护。
+// 超过 limit 立刻断开并抛 code=too_large，避免把超大请求吃进内存。
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        const e = new Error('too_large');
+        e.code = 'too_large';
+        reject(e);
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -320,6 +343,81 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/me' && method === 'GET') {
       const s = getSession(req);
       return sendJson(res, 200, { name: s.name, role: s.role });
+    }
+
+    // ---- 应急文件柜（默认关闭；必须人为授权开一个限时窗口才能用）
+    // 设计见 src/vault.js：不进数据库，元数据是内容旁边的 JSON，窗口状态只在内存里。
+    if (p === '/api/vault/status' && method === 'GET') {
+      return sendJson(res, 200, await vault.status());
+    }
+
+    if (p === '/api/vault/open' && method === 'POST') {
+      const body = await readBody(req);
+      const r = vault.openWindow(body.minutes, body.key || req.headers['x-vault-key']);
+      if (!r.ok) return sendJson(res, r.error === 'disabled' ? 501 : 403, { error: r.error });
+      console.log(`[vault] 窗口开启 ${r.minutes} 分钟（by ${getSession(req).name}）`);
+      return sendJson(res, 200, { ...r, ...(await vault.status()) });
+    }
+
+    if (p === '/api/vault/close' && method === 'POST') {
+      vault.closeWindow();
+      return sendJson(res, 200, { ok: true, ...(await vault.status()) });
+    }
+
+    if (p === '/api/vault/files' && method === 'GET') {
+      if (!vault.isOpen()) return sendJson(res, 403, { error: 'vault_closed' });
+      return sendJson(res, 200, { files: await vault.list(), ...(await vault.status()) });
+    }
+
+    if (p === '/api/vault/files' && method === 'POST') {
+      if (!vault.isOpen()) return sendJson(res, 403, { error: 'vault_closed' });
+      const name = url.searchParams.get('name') || req.headers['x-file-name'] || 'file.bin';
+      const to = url.searchParams.get('to') || 'all';
+      let buf;
+      try {
+        buf = await readRaw(req, vault.MAX_FILE + 1);
+      } catch (e) {
+        if (e.code === 'too_large') return sendJson(res, 413, { error: 'too_large', limit: vault.MAX_FILE });
+        throw e;
+      }
+      const r = await vault.save(buf, { name, to, from: getSession(req).name });
+      if (r.error === 'empty') return sendJson(res, 400, { error: 'empty' });
+      if (r.error === 'too_large') {
+        return sendJson(res, 413, { error: 'too_large', size: r.size, limit: vault.MAX_FILE });
+      }
+      if (r.error === 'quota') {
+        return sendJson(res, 409, { error: 'quota_exceeded', used: r.used, limit: vault.QUOTA, files: r.files });
+      }
+      return sendJson(res, r.dup ? 200 : 201, { file: r.meta, dup: !!r.dup, ...(await vault.status()) });
+    }
+
+    const fv = p.match(/^\/api\/vault\/files\/([0-9a-f]{16})$/);
+    if (fv) {
+      if (!vault.isOpen()) return sendJson(res, 403, { error: 'vault_closed' });
+      const id = fv[1];
+      if (method === 'GET') {
+        const meta = await vault.get(id);
+        if (!meta) return sendJson(res, 404, { error: 'not_found' });
+        // 一律当附件下载：站点同源，内联渲染 html/svg 会变成 XSS
+        const ascii = meta.name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': meta.size,
+          'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(meta.name)}`,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+        });
+        const rs = vault.stream(id);
+        rs.on('error', () => { try { res.destroy(); } catch {} });
+        rs.pipe(res);
+        return;
+      }
+      if (method === 'DELETE') {
+        const ok = await vault.remove(id);
+        if (!ok) return sendJson(res, 404, { error: 'not_found' });
+        return sendJson(res, 200, { ok: true, ...(await vault.status()) });
+      }
+      return sendJson(res, 405, { error: 'method_not_allowed' });
     }
 
     // ---- 成员管理（仅管理员）

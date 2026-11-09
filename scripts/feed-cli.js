@@ -88,10 +88,14 @@ const PASSWORD = fromKv('FEED_PASSWORD') || '';
 const MAX_MSG_CHARS = 8000;
 const MAX_NAME_CHARS = 24;
 
+// 应急文件柜：单文件 2MB（服务端同值），授权口令单独一把，和登录凭据分开
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const VAULT_KEY = fromKv('FEED_VAULT_KEY') || process.env.FEED_VAULT_KEY || '';
+
 // ---------------------------------------------------------------- HTTP
 
 // 为什么不用 fetch：部分精简运行时的 undici 会因 WASM 内存限制失败，node:https 更稳
-function request(url, { method = 'GET', headers = {}, body, timeout = 40000 } = {}) {
+function request(url, { method = 'GET', headers = {}, body, timeout = 40000, binary = false } = {}) {
   const u = new URL(url);
   const mod = u.protocol === 'http:' ? http : https;
   return new Promise((resolve, reject) => {
@@ -104,6 +108,13 @@ function request(url, { method = 'GET', headers = {}, body, timeout = 40000 } = 
         headers: { ...headers, ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}) },
       },
       (res) => {
+        // 下载文件：原样收字节，不做 utf8 解码（会把二进制弄坏）
+        if (binary) {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, buffer: Buffer.concat(chunks) }));
+          return;
+        }
         let data = '';
         res.setEncoding('utf8');
         res.on('data', (c) => (data += c));
@@ -196,6 +207,11 @@ async function api(method, pathname, body, attempt = 0) {
       not_found: '对象不存在（id 可能写错）',
       bad_id: 'id 格式不对（需 36 位 UUID）',
       empty: '内容为空',
+      vault_closed: '文件柜关着：先执行 feed vault open 30m 授权（人的动作，不是自动的）',
+      bad_key: '授权口令不对：FEED_VAULT_KEY 与服务器 .env 的 VAULT_KEY 不一致',
+      disabled: '服务器没配 VAULT_KEY，文件柜整体禁用（这是默认状态）',
+      too_large: '文件超过 2MB 上限',
+      quota_exceeded: '文件柜 10MB 已满：feed vault ls 看清单，删掉旧的再传',
     }[code] || `HTTP ${res.status}`;
     die(`操作失败：${hint}${code ? `（${code}）` : ''}`);
   }
@@ -270,6 +286,160 @@ function readContent(args, { positional = false } = {}) {
   if (typeof args.content === 'string') return args.content.trim();
   if (positional && args._[0]) return args._[0].trim();
   return '';
+}
+
+// ---------------------------------------------------------------- 文件柜
+// 原始字节请求：上传时 body 是 Buffer，下载时 binary=true 拿回 Buffer。
+// 和 api() 分开是为了不把二进制塞进 JSON.stringify，也不想让 2MB 走 utf8 解码。
+async function apiRaw(method, pathname, { body, binary = false, timeout = 120000 } = {}) {
+  const cookie = await login();
+  let res;
+  try {
+    res = await request(withShare(pathname), {
+      method,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/octet-stream' } : {}),
+        Cookie: cookie,
+      },
+      body,
+      binary,
+      timeout,
+    });
+  } catch (err) {
+    die(`网络请求失败：${err && err.message ? err.message : String(err)}`);
+  }
+  if (res.status >= 400) {
+    const txt = res.text !== undefined ? res.text : (res.buffer || Buffer.alloc(0)).toString('utf8');
+    let d = null;
+    try { d = JSON.parse(txt); } catch { /* 非 JSON */ }
+    const code = (d && d.error) || '';
+    const hint = {
+      vault_closed: '文件柜关着：先执行 feed vault open 30m 授权（人的动作，不是自动的）',
+      bad_key: '授权口令不对：FEED_VAULT_KEY 与服务器 .env 的 VAULT_KEY 不一致',
+      disabled: '服务器没配 VAULT_KEY，文件柜整体禁用',
+      too_large: '文件超过 2MB 上限',
+      quota_exceeded: '文件柜 10MB 已满：feed vault ls 看清单，删掉旧的再传',
+      not_found: '文件不存在（id 写错，或已过期被清理）',
+    }[code] || `HTTP ${res.status}`;
+    die(`操作失败：${hint}${code ? `（${code}）` : ''}`);
+  }
+  return res;
+}
+
+// '30m' / '2h' / '90'（无单位按分钟）→ 毫秒时长。
+// 注意别和 parseSince 混：那个返回的是时间戳（now - 时长），不能拿来当窗口长度。
+function parseDuration(v) {
+  if (!v) return 0;
+  const m = String(v).trim().match(/^(\d+(?:\.\d+)?)\s*([smhd])?$/i);
+  if (!m) return 0;
+  const unit = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[String(m[2] || 'm').toLowerCase()];
+  return parseFloat(m[1]) * unit;
+}
+
+function fmtSize(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b}B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)}K`;
+  return `${(b / 1048576).toFixed(2)}M`;
+}
+
+function vaultUsageLine(s) {
+  const state = s.enabled === false
+    ? '已禁用（服务器未配 VAULT_KEY）'
+    : s.open
+      ? `已开启，剩 ${Math.ceil((s.remainingSec || 0) / 60)} 分钟`
+      : '已关闭';
+  return `文件柜：${state} · ${s.count || 0} 个文件 · ${fmtSize(s.used)} / ${fmtSize(s.quota)}（单文件上限 ${fmtSize(s.maxFile)}）`;
+}
+
+async function cmdVault(args) {
+  const sub = args._[0] || 'status';
+
+  if (sub === 'open' || sub === 'on') {
+    if (!VAULT_KEY) die('没有授权口令：先把服务器的 VAULT_KEY 记到凭据库（setkey FEED_VAULT_KEY <值>）');
+    const raw = args._[1] || args.minutes || '15m';
+    const minutes = Math.max(1, Math.round(parseDuration(raw) / 60000));
+    const res = await api('POST', '/api/vault/open', { minutes, key: VAULT_KEY });
+    console.log(`✓ 已授权，窗口开启 ${Math.round(res.remainingSec / 60)} 分钟（到期自动关闭，进程重启也失效）`);
+    console.log('  ' + vaultUsageLine(res));
+    return;
+  }
+
+  if (sub === 'off' || sub === 'close') {
+    const res = await api('POST', '/api/vault/close');
+    console.log('✓ 文件柜已关闭');
+    console.log('  ' + vaultUsageLine(res));
+    return;
+  }
+
+  if (sub === 'ls' || sub === 'list') {
+    const res = await api('GET', '/api/vault/files');
+    const files = res.files || [];
+    console.log(vaultUsageLine(res));
+    if (!files.length) return;
+    for (const f of files) {
+      const age = Math.round((Date.now() - f.ts) / 60000);
+      console.log(`${f.id}  ${fmtSize(f.size).padStart(7)}  ${f.name}  ${f.from}→${f.to}  ${age}m前`);
+    }
+    return;
+  }
+
+  if (sub === 'put' || sub === 'up') {
+    const p = args._[1];
+    if (!p) die('用法：feed vault put <本地文件> [--to 收件人] [--name 显示名]');
+    if (!fs.existsSync(p)) die(`文件不存在：${p}`);
+    const st = fs.statSync(p);
+    if (st.isDirectory()) die(`这是目录，不支持整目录上传：${p}`);
+    if (!st.size) die('文件是空的，没必要传');
+    if (st.size > MAX_FILE_BYTES) {
+      die(
+        `文件 ${fmtSize(st.size)} 超过单文件上限 2MB（超 ${fmtSize(st.size - MAX_FILE_BYTES)}），未上传。\n` +
+        '  改法：压缩、截取需要的片段，或分卷切成几个 ≤2MB 的文件'
+      );
+    }
+    const buf = fs.readFileSync(p);
+    const name = args.name || path.basename(p);
+    const qs = '?name=' + encodeURIComponent(name) + (args.to ? '&to=' + encodeURIComponent(args.to) : '');
+    const res = await apiRaw('POST', '/api/vault/files' + qs, { body: buf });
+    const f = (res.text ? JSON.parse(res.text) : {}).file || {};
+    console.log(`✓ file ${f.id} ${fmtSize(f.size)} ${f.name} → ${f.to}`);
+    if (res.text && JSON.parse(res.text).dup) console.log('  （内容与已有文件相同，复用了那份，不额外占空间）');
+    return;
+  }
+
+  if (sub === 'get' || sub === 'dl' || sub === 'down') {
+    const id = args._[1];
+    if (!id) die('用法：feed vault get <id> [--out 本地路径]');
+    const list = await api('GET', '/api/vault/files');
+    const hits = (list.files || []).filter((f) => f.id.startsWith(id));
+    if (!hits.length) die(`没有这个文件：${id}（用 feed vault ls 看现有 id）`);
+    if (hits.length > 1) die(`id "${id}" 不唯一，匹配到 ${hits.length} 个，请多给几位`);
+    const meta = hits[0];
+    const out = args.out || meta.name;
+    const res = await apiRaw('GET', '/api/vault/files/' + meta.id, { binary: true });
+    fs.writeFileSync(out, res.buffer);
+    console.log(`✓ 已保存 ${out}（${fmtSize(res.buffer.length)}，来自 ${meta.from}→${meta.to}）`);
+    return;
+  }
+
+  if (sub === 'rm' || sub === 'del' || sub === 'delete') {
+    const id = args._[1];
+    if (!id) die('用法：feed vault rm <id>');
+    const res = await api('DELETE', '/api/vault/files/' + encodeURIComponent(id));
+    console.log(`✓ 已删除 ${id}`);
+    console.log('  ' + vaultUsageLine(res));
+    return;
+  }
+
+  // 默认 status
+  const s = await api('GET', '/api/vault/status');
+  console.log(vaultUsageLine(s));
+  if (s.enabled === false) {
+    console.log('  服务器没有 VAULT_KEY，这个功能整体不可用（这是默认状态）');
+  } else if (!s.open) {
+    console.log('  要用先授权：feed vault open 30m');
+  }
+  if (s.ttlHours) console.log(`  文件 ${s.ttlHours} 小时后自动清理`);
 }
 
 // ---------------------------------------------------------------- 命令
@@ -494,6 +664,15 @@ const HELP = `feed-cli —— WorkBuddy Feed / ToDo 命令行客户端
                           正文 ≤8000 字符、收件人/发送者名 ≤24 字符（本地先校验，超了不发）
   inbox                   收消息（--to 我 / --since 30m / --limit / --q / --full）
   msgrm <id>              删消息
+
+  应急文件柜（默认关闭，必须人为授权；不进数据库，10MB 总量 / 单文件 2MB）
+  vault                   看状态（是否开启、占用多少）
+  vault open [30m]        人为授权，开一个限时窗口（到期自动关）
+  vault off               立刻关
+  vault ls                列出窗口内的文件
+  vault put <文件> [--to 收件人] [--name 显示名]
+  vault get <id> [--out 本地路径]
+  vault rm <id>
   health                  服务与存储状态
 
 配置：FEED_BASE / FEED_TOKEN / FEED_SHARECODE（或 FEED_PASSWORD），也可写在项目 .env
@@ -516,6 +695,7 @@ async function main() {
     case 'send': case 'msg': return cmdSend(args);
     case 'inbox': return cmdInbox(args);
     case 'msgrm': return cmdMsgRm(args);
+    case 'vault': return cmdVault(args);
     case 'health': return cmdHealth();
     default: die(`未知命令：${cmd}\n\n${HELP}`);
   }

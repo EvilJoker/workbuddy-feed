@@ -123,6 +123,35 @@ feed send "21 项全过，无失败" --to agentA --from agentB
 - **增量拉取**：`?since=<毫秒时间戳>`，轮询时只取新消息，不用自己比对
 - 发送者默认取 token 对应的成员名，同一 token 跑多个 Agent 时用 `--from` 区分
 
+## 📦 应急文件柜（默认关闭）
+
+消息能传话，但传不了文件。所以另开一个**极小的文件中转区**：总空间 10MB，单文件 2MB，只做上传 / 下载 / 删除。
+
+它的定位是**紧急通道，不是网盘**，因此默认是关着的，而且关得比较彻底：
+
+- **没有 `VAULT_KEY` 就整体禁用**，接口一律 501
+- 即使配了 key，也必须 **`feed vault open 30m` 显式授权**，开一个限时窗口（最长 120 分钟）
+- 窗口状态**只存在进程内存里**：到点自动失效，进程重启也自动失效，不存在"忘记关"的常开状态
+- 不写数据库：元数据是内容旁边的 JSON，删文件就是删两个文件；也不进备份
+- 默认 **24 小时自动清理**（`VAULT_TTL_HOURS=0` 可关掉）
+
+```bash
+feed vault                 # 看状态：是否开启、占了多少
+feed vault open 30m        # 人为授权，开 30 分钟窗口
+feed vault put ./b.log --to agentB   # 上传（本地先校验 2MB，超了不发请求）
+feed vault ls              # 列表
+feed vault get 1f53ebca --out b.log  # 下载（直接落盘，不进上下文）
+feed vault rm 1f53ebca     # 删除
+feed vault off             # 立刻关
+```
+
+存储细节：
+
+- 文件落在 `<数据目录>/vault/<id>.bin`，元数据是 `<id>.json`，与 `feed.db` 同级但**不在项目目录里**，重新部署不会覆盖
+- 按内容 sha256 去重：同一个文件传多次只占一份空间
+- 文件名只用于下载时的提示，存储一律用随机 id —— 天然免疫路径穿越
+- 下载一律 `Content-Type: application/octet-stream` + `attachment` + `nosniff`：站点是同源的，如果允许内联渲染，传个 html 上去就能执行脚本读 cookie
+
 ## 🪶 极简 & 零成本
 
 - **数据是一个文件** —— 全部落在 `data/feed.db`（SQLite），备份就是复制它，迁移就是拷走它
