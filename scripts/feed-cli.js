@@ -83,6 +83,11 @@ const SHARE = fromKv('FEED_SHARECODE') || '';
 const TOKEN = fromKv('FEED_TOKEN') || '';
 const PASSWORD = fromKv('FEED_PASSWORD') || '';
 
+// 服务端硬限制（server.js /api/messages）：一律在本地先拦，
+// 不要让 agent 发出去才发现 413 too_long，或被 cleanName 静默截断成别人。
+const MAX_MSG_CHARS = 8000;
+const MAX_NAME_CHARS = 24;
+
 // ---------------------------------------------------------------- HTTP
 
 // 为什么不用 fetch：部分精简运行时的 undici 会因 WASM 内存限制失败，node:https 更稳
@@ -388,11 +393,35 @@ function parseSince(v) {
   return Number.isFinite(t) ? t : 0;
 }
 
+// 收件人/发送者名字：服务端 cleanName 会去掉所有空白并截到 24 字符。
+// 静默截断会让消息发给一个不存在的名字（或看起来发给别人），所以本地先对齐规则：
+// 去空白后仍超长 → 直接报错；只是去了空白 → stderr 提示真实收件人，不阻塞。
+function normName(flag, v) {
+  if (v == null || v === '') return undefined;
+  const s = String(v);
+  const norm = s.replace(/\s+/g, '');
+  if (!norm) die(`${flag} 是空白，请给一个名字（默认 all）`);
+  if (norm.length > MAX_NAME_CHARS) {
+    die(`${flag} 太长：去空白后 ${norm.length} 字符，上限 ${MAX_NAME_CHARS} 字符 —— "${norm.slice(0, MAX_NAME_CHARS)}…" 请改短`);
+  }
+  if (norm !== s) console.error(`! ${flag} "${s}" 含空白，按服务端规则实际用 "${norm}"`);
+  return norm;
+}
+
 async function cmdSend(args) {
   const content = readContent(args, { positional: true });
   if (!content) die('内容为空：feed-cli send "文本" [--to 收件人] [--from 发送者]');
-  const body = { content, to: args.to || 'all' };
-  if (args.from) body.from = args.from;
+  if (content.length > MAX_MSG_CHARS) {
+    const over = content.length - MAX_MSG_CHARS;
+    die(
+      `消息正文 ${content.length} 字符，超过上限 ${MAX_MSG_CHARS}（超 ${over} 字符），未发送。\n` +
+      '  改法二选一：① 拆成几条短消息发 ② 正文写到文件，消息里只给路径（服务端硬限 8000，超了必回 413）'
+    );
+  }
+  const to = normName('--to', args.to) || 'all';
+  const from = normName('--from', args.from);
+  const body = { content, to };
+  if (from) body.from = from;
   const res = await api('POST', '/api/messages', body);
   const it = res.message || {};
   console.log(`✓ msg ${String(it.id).slice(0, 8)} → ${it.recipient}（来自 ${it.sender}）`);
@@ -462,6 +491,7 @@ const HELP = `feed-cli —— WorkBuddy Feed / ToDo 命令行客户端
   delete <id>             删除
   search <关键字>         搜索 memo + todo
   send <文本>             发消息给其他 agent（--to 收件人，默认 all；--from 覆盖发送者）
+                          正文 ≤8000 字符、收件人/发送者名 ≤24 字符（本地先校验，超了不发）
   inbox                   收消息（--to 我 / --since 30m / --limit / --q / --full）
   msgrm <id>              删消息
   health                  服务与存储状态
