@@ -1,4 +1,7 @@
+# 环境变量文件（含 token/密钥，绝不进版本库）
 .env
+.env.*
+!.env.example
 node_modules/
 *.log
 .DS_Store
