@@ -150,6 +150,34 @@
   .tochip { background: #f1f3f6; color: #444c56; border-radius: 6px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
   .tochip.all { background: #e8f0fe; color: #1a5cc8; }
 
+  /* 接入说明视图（给 agent 看的说明书） */
+  .intro-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-bottom: 12px; }
+  .intro-card h3 { font-size: 15px; margin-bottom: 9px; }
+  .intro-card p { color: var(--muted); font-size: 13px; line-height: 1.75; margin-bottom: 9px; }
+  .intro-card p:last-child { margin-bottom: 0; }
+  .intro-card ol, .intro-card ul { margin: 0 0 10px 18px; color: var(--muted); font-size: 13px; line-height: 1.85; }
+  .intro-card li { margin-bottom: 2px; }
+  .intro-card b { color: var(--text); }
+  .intro-hero { border-color: #c9dcff; background: linear-gradient(180deg, #f3f8ff, #fff); }
+  pre.code { position: relative; background: #1f2329; color: #e6e8eb; border-radius: 10px; padding: 12px 14px; font-size: 12.5px; line-height: 1.72; overflow-x: auto; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; margin: 0 0 10px; }
+  pre.code .cp { position: absolute; top: 7px; right: 7px; background: rgba(255,255,255,.16); color: #e6e8eb; border: 0; border-radius: 6px; padding: 2px 9px; font-size: 11px; cursor: pointer; font-family: inherit; }
+  pre.code .cp:hover { background: rgba(255,255,255,.28); }
+  .cmds { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .cmds td { padding: 6px 4px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.6; }
+  .cmds tr:last-child td { border-bottom: 0; }
+  .cmds td:first-child { width: 47%; color: var(--tag-text); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }
+  .cmds td:last-child { color: var(--muted); }
+  .scrollx { overflow-x: auto; }
+  .tok { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; background: #eef1f4; border-radius: 6px; padding: 1px 6px; }
+  .intro-card .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .intro-card .row button { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 8px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+  .intro-card .row button:hover { color: var(--accent); border-color: var(--accent); }
+  .intro-card .row button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.cp-inline { border: 1px solid var(--border); background: var(--card); color: var(--muted); border-radius: 7px; padding: 2px 9px; font-size: 12px; cursor: pointer; margin-left: 4px; font-family: inherit; }
+  button.cp-inline:hover { color: var(--accent); border-color: var(--accent); }
+  .intro-note { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .warnbox { background: #fff8e1; border: 1px solid #f0dda0; border-radius: 10px; padding: 10px 12px; font-size: 12.5px; color: #7a5b00; line-height: 1.75; }
+
   /* mobile */
   @media (max-width: 480px) {
     .wrap { padding: 12px 10px 70px; }
@@ -239,6 +267,7 @@
     <div class="pager" id="pager"></div>
     <div class="count"><span id="countText"></span><span class="fresh" id="freshInfo"></span></div>
     <div id="list"></div>
+    <div id="intro" style="display:none"></div>
   </div>
 </div>
 
@@ -300,17 +329,19 @@ async function loadMe() {
 async function init() {
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+  introCache = null; // 换身份后重新生成接入信息
   await loadMe();
   await loadItems();
   startAutoRefresh();
 }
 
-// ---- 视图切换：点左上角 Logo 在 Feed → ToDo → 消息 之间循环 ----
-const VIEWS = ['feed', 'todo', 'msg'];
+// ---- 视图切换：点左上角 Logo 在 Feed → ToDo → 消息 → 接入 之间循环 ----
+const VIEWS = ['feed', 'todo', 'msg', 'intro'];
 const VIEW_META = {
-  feed: { name: 'Feed', icon: '📒', title: 'WorkBuddy Feed' },
-  todo: { name: 'ToDo', icon: '✅', title: 'WorkBuddy ToDo' },
-  msg:  { name: '消息', icon: '💬', title: 'WorkBuddy Messages' },
+  feed:  { name: 'Feed', icon: '📒', title: 'WorkBuddy Feed' },
+  todo:  { name: 'ToDo', icon: '✅', title: 'WorkBuddy ToDo' },
+  msg:   { name: '消息', icon: '💬', title: 'WorkBuddy Messages' },
+  intro: { name: '接入', icon: '🤖', title: 'WorkBuddy 接入说明' },
 };
 
 function toggleView() {
@@ -335,10 +366,20 @@ function applyView() {
   document.getElementById('newRecipient').style.display = view === 'msg' ? '' : 'none';
   document.getElementById('newRecipient').value = '';
   document.getElementById('exportBtn').style.display = view === 'feed' ? '' : 'none';
-  document.getElementById('favBtn').style.display = view === 'msg' ? 'none' : '';
+  document.getElementById('favBtn').style.display = view === 'msg' || view === 'intro' ? 'none' : '';
   if (favOnly) { favOnly = false; document.getElementById('favBtn').classList.remove('on'); }
   page = 1;
   editingId = null;
+
+  // 接入说明是整块静态内容：藏掉编辑区 / 筛选栏 / 列表，只留说明书
+  const isIntro = view === 'intro';
+  document.getElementById('intro').style.display = isIntro ? '' : 'none';
+  document.getElementById('list').style.display = isIntro ? 'none' : '';
+  document.querySelector('.composer').style.display = isIntro ? 'none' : '';
+  document.querySelector('.toolbar').style.display = isIntro ? 'none' : '';
+  document.querySelector('.count').style.display = isIntro ? 'none' : '';
+  document.getElementById('pager').style.display = isIntro ? 'none' : '';
+
   document.getElementById('input').placeholder = view === 'todo'
     ? '添加一条 ToDo… 支持 #标签 `代码` **加粗** 和链接'
     : view === 'msg'
@@ -350,12 +391,228 @@ function applyView() {
     : view === 'todo'
       ? '表情 · #标签 · 状态随时可改 · Ctrl+Enter 添加'
       : '表情 · #标签 均可搜索 · Ctrl+Enter 发送';
+  if (isIntro) { renderIntro(); return; }
   loadItems();
 }
 
 function showLogin() {
   document.getElementById('app').style.display = 'none';
   document.getElementById('login').style.display = 'block';
+}
+
+// ---------------------------------------------------------------- 接入说明
+// 这一页是「写给另一个 agent 看的说明书」：地址、分享码、token 都按当前登录身份实时生成，
+// 代码块可一键复制，人只要转交命令，不用自己讲一遍怎么用。
+const COPY = [];
+let introTokenShown = false;
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function copyText(text, el) {
+  const done = () => {
+    if (!el) return;
+    const old = el.textContent;
+    el.textContent = '✓ 已复制';
+    setTimeout(() => { el.textContent = old; }, 1400);
+  };
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* 忽略 */ }
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+
+function copyAt(i, el) { copyText(COPY[i], el); }
+
+function cpBtn(text, cls, label) {
+  COPY.push(text);
+  return `<button class="${cls || 'cp'}" onclick="copyAt(${COPY.length - 1}, this)">${label || '复制'}</button>`;
+}
+
+function codeBlock(text) {
+  return `<pre class="code">${cpBtn(text)}${esc(text)}</pre>`;
+}
+
+function maskToken(t) {
+  return t ? t.slice(0, 6) + '……' + t.slice(-4) : '（当前登录没有 token）';
+}
+
+function toggleIntroToken() {
+  const d = introCtx();
+  introTokenShown = !introTokenShown;
+  const el = document.getElementById('introTok');
+  if (el) el.textContent = introTokenShown ? d.token : maskToken(d.token);
+  const btn = document.getElementById('introTokBtn');
+  if (btn) btn.textContent = introTokenShown ? '隐藏' : '显示';
+}
+
+// 从 URL 拿分享码（网关每次请求都要带），服务端配置作为兜底
+function pageSharecode() {
+  return new URLSearchParams(location.search).get('sharecode') || '';
+}
+
+let introCache = null;
+function introCtx() {
+  const d = introCache || {};
+  const sc = d.sharecode || pageSharecode() || '';
+  const base = d.base || location.origin;
+  const token = (d.me && d.me.token) || '';
+  return { d, sc, base, token, qs: sc ? '?sharecode=' + encodeURIComponent(sc) : '' };
+}
+
+async function renderIntro() {
+  const box = document.getElementById('intro');
+  if (!introCache) box.innerHTML = '<div class="empty">正在生成接入说明…</div>';
+  try {
+    const sc = pageSharecode();
+    introCache = await api('/api/intro' + (sc ? '?sharecode=' + encodeURIComponent(sc) : ''));
+  } catch (e) {
+    box.innerHTML = '<div class="empty">接入信息加载失败，点右上角 🔄 重试</div>';
+    return;
+  }
+  box.innerHTML = introHtml();
+}
+
+function introHtml() {
+  COPY.length = 0;
+  const { d, sc, base, token, qs } = introCtx();
+  const L = d.limits || {};
+  const cliUrl = ((d.cli && d.cli.self) || base + '/cli.js') + qs;
+  const ghUrl = (d.cli && d.cli.github) || '';
+  const me = d.me || {};
+
+  const step1 = ['mkdir -p ~/.local/bin',
+    `curl -fsSL "${cliUrl}" -o ~/.local/bin/feed`,
+    'chmod +x ~/.local/bin/feed'].join('\n');
+
+  const step2 = ['mkdir -p ~/.config',
+    "cat > ~/.config/feed-cli.env <<'EOF'",
+    `FEED_BASE=${base}`,
+    `FEED_TOKEN=${token || '把上面的 token 填这里'}`,
+    `FEED_SHARECODE=${sc || '把分享码填这里'}`,
+    'EOF',
+    'chmod 600 ~/.config/feed-cli.env'].join('\n');
+
+  const step3 = '~/.local/bin/feed health';
+
+  const full = ['# 1) 下载 CLI（需要 Node.js 16+）', step1,
+    '', '# 2) 写凭据（只做一次）', step2,
+    '', '# 3) 自检', step3].join('\n');
+
+  const cmds = [
+    ['📒 Feed / ✅ ToDo', [
+      ['add "内容"', '记一条 memo；加 --todo 建成待办，--status doing 指定状态'],
+      ['add --file 报告.md', '正文放文件里再传，不占 agent 上下文'],
+      ['list --limit 5', '列最近的；支持 --tag 日报 / --todo / --status / --full'],
+      ['get <id> --full', '看单条全文'],
+      ['update <id> --status done', '改状态；也可 --content / --fav / --pin'],
+      ['delete <id>', '删除'],
+      ['search 关键字', '同时搜 memo 和 todo'],
+    ]],
+    ['💬 消息（agent 之间传话）', [
+      ['send "跑个冒烟，结果贴回来" --to agentB --from agentA', '发消息；--to 省略 = 广播 all'],
+      ['inbox --to agentB --since 30m', '收自己的 + 广播；--since 支持 30m / 2h / 3d'],
+      ['msgrm <id>', '删消息（消息不可编辑）'],
+    ]],
+    ['📦 应急文件柜（默认关闭）', [
+      ['vault', '看是否已授权、占用了多少'],
+      ['vault open 30m', '人为授权开窗口（最长 120 分钟，重启即失效）'],
+      ['vault put 文件 --to agentB', '上传；单文件 2MB 以内'],
+      ['vault get <id> --out ./x.log', '下载到本地，内容不进上下文'],
+      ['vault rm <id> / vault off', '删文件 / 立刻关窗口'],
+    ]],
+    ['🔧 其他', [
+      ['health', '自检：服务地址、存储、各项计数'],
+      ['send / inbox 的 --full', '看消息全文而不是首行'],
+    ]],
+  ];
+
+  const lim = [
+    ['消息正文', `≤ ${L.msgChars || 8000} 字符`],
+    ['--to / --from 名字', `≤ ${L.nameChars || 24} 字符，空白会被去掉`],
+    ['消息队列容量', `只留最近 ${L.queue || 1000} 条，超了丢最老的`],
+    ['文件柜', `单文件 ≤ ${L.vaultFileMb || 2}MB，总量 ${L.vaultMb || 10}MB`],
+    ['文件柜可用性', '默认关闭，必须有人 vault open 才读得动'],
+    ['memo / todo 正文', '服务端按 256KB 请求体卡，超长请走 --file 或文件柜'],
+  ];
+
+  const cmdTables = cmds.map(([title, rows]) => `
+    <div class="intro-card">
+      <h3>${title}</h3>
+      <div class="scrollx"><table class="cmds">${rows.map(([c, w]) =>
+        `<tr><td>${esc(c)}</td><td>${w}</td></tr>`).join('')}</table></div>
+    </div>`).join('');
+
+  return `
+  <div class="intro-card intro-hero">
+    <h3>🤖 接入说明 · 给另一个 agent 看</h3>
+    <p>这一页是写给「要接入本服务的那个 agent」的。你（人）不用逐句转述，点下面的按钮复制全部命令，直接粘到它的终端里执行，它就知道怎么用了。</p>
+    <div class="row">${cpBtn(full, 'primary', '📋 复制全部命令')}</div>
+    <p class="intro-note">目标机器需要 Node.js 16 或更高版本。装不上时见最后一节的 HTTP 兜底方案。</p>
+  </div>
+
+  <div class="intro-card">
+    <h3>👤 你的身份</h3>
+    <p>当前登录：<b>${esc(me.name || '')}</b> · 角色 ${esc(me.role || '')}</p>
+    <p style="margin-bottom:0">接入 token：<span class="tok" id="introTok">${esc(introTokenShown ? token : maskToken(token))}</span>
+      <button id="introTokBtn" onclick="toggleIntroToken()" style="border:1px solid var(--border);background:var(--card);border-radius:7px;padding:2px 9px;font-size:12px;color:var(--muted);cursor:pointer;margin-left:6px">${introTokenShown ? '隐藏' : '显示'}</button>
+      ${cpBtn(token || '', 'cp-inline', '复制')}
+    </p>
+    <p class="intro-note" style="margin-top:8px">这段凭据等于这个身份的钥匙，别发到公开渠道。换成员就换 token：管理员在「👥 成员」里新建一个成员，用它的专属链接登录后再来这里复制。</p>
+  </div>
+
+  <div class="intro-card">
+    <h3>1️⃣ 装 CLI（一次）</h3>
+    <p>下载地址就在本站，内网也能装：<span class="tok">${esc(cliUrl)}</span></p>
+    ${codeBlock(step1)}
+    ${ghUrl ? `<p class="intro-note">备用（GitHub，可能被内网拦）：<span class="tok">${esc(ghUrl)}</span></p>` : ''}
+  </div>
+
+  <div class="intro-card">
+    <h3>2️⃣ 写凭据（一次）</h3>
+    <p>写到 <span class="tok">~/.config/feed-cli.env</span>，CLI 会自动读，不用每次带参数。</p>
+    ${codeBlock(step2)}
+  </div>
+
+  <div class="intro-card">
+    <h3>3️⃣ 自检</h3>
+    ${codeBlock(step3)}
+    <p class="intro-note">返回 <span class="tok">{"ok":true,"storage":"sqlite",…}</span> 并带 memos / todos / messages 计数，就说明通了。若提示 401 检查 token；若 403「链接不完整」检查分享码。</p>
+  </div>
+
+  ${cmdTables}
+
+  <div class="intro-card">
+    <h3>⚠️ 硬限制</h3>
+    <div class="scrollx"><table class="cmds">${lim.map(([k, v]) =>
+      `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table></div>
+  </div>
+
+  <div class="intro-card">
+    <h3>🤝 给 agent 的几条纪律</h3>
+    <div class="warnbox">
+      <b>1. 只用命令行，别手拼 HTTP。</b>认证、cookie、分享码都由 CLI 处理，你自己拼 curl 只会踩坑。<br>
+      <b>2. 长文本先落文件再传。</b>用 <span class="tok">add --file</span> / <span class="tok">put --file</span>，正文不要读进上下文再回显，省 token 也少出错。<br>
+      <b>3. 判断成功只看退出码。</b>成功输出以 ✓ 开头，失败以 ✗ 开头并给出原因；<span class="tok">send</span> 不自动重试，失败要显式再发一次。<br>
+      <b>4. 消息是传话通道，不是仓库。</b>只留最近 ${L.queue || 1000} 条会被挤掉，重要结论用 <span class="tok">add</span> 存成 memo 或写本地文件。<br>
+      <b>5. 大于 2MB 的东西别走文件柜。</b>消息里只发文件 id 和一句说明，对方 <span class="tok">vault get</span> 拿。<br>
+      <b>6. 协作时先查再发。</b>用 <span class="tok">inbox --since</span> 增量取，别重复处理同一条指令。
+    </div>
+  </div>
+
+  <div class="intro-card">
+    <h3>🔌 没有 Node.js 时</h3>
+    <p>可以直接调 HTTP 接口，但需要自己处理登录 cookie 和每个请求的 <span class="tok">?sharecode=</span>，比用 CLI 麻烦得多。接口一览在项目 README 里。</p>
+    <p class="intro-note">${ghUrl ? `源码与文档：<span class="tok">${esc(ghUrl.replace('/raw.githubusercontent.com/', '/github.com/').replace('/main/', '/blob/main/').replace('/scripts/feed-cli.js', ''))}</span>` : ''}</p>
+  </div>`;
 }
 
 // ---- 刷新：手动（🔄）+ 每 60 秒自动 ----
@@ -377,6 +634,7 @@ function assignData(d) {
 }
 
 async function loadItems() {
+  if (view === 'intro') return; // 接入说明不拉列表
   const d = await api(apiBase());
   assignData(d);
   lastRefresh = Date.now();
@@ -400,6 +658,7 @@ function updateFresh(msg) {
 
 async function refreshItems(manual) {
   if (refreshing) return;
+  if (view === 'intro') return; // 静态页，不需要轮询
   // 未登录 / 编辑中（自动刷新时不打断）/ 页面在后台（自动刷新时跳过）
   if (document.getElementById('app').style.display === 'none') return;
   if (!manual && editingId !== null) return;

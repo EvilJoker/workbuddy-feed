@@ -138,7 +138,17 @@ check('删除消息', st == 200 and r.get('ok'), r)
 st, r = call('GET', '/api/health')
 check('health 带 messages 计数', r.get('messages') == 1, r)
 
-print('6) 删除 + 鉴权')
+print('6) 接入说明页（给别的 agent 看）')
+st, r = call('GET', '/api/intro')
+check('intro 返回服务地址与分享码字段', st == 200 and r.get('base', '').startswith('http') and 'sharecode' in r, r)
+check('intro 带当前身份的 token', st == 200 and len(str(r.get('me', {}).get('token', ''))) == 36, r)
+check('intro 带各项硬限制', st == 200 and r.get('limits', {}).get('msgChars') == 8000
+      and r.get('limits', {}).get('queue') == 1000, r)
+check('intro 给出 CLI 下载地址', st == 200 and str(r.get('cli', {}).get('self', '')).endswith('/cli.js'), r)
+st, txt = call('GET', '/cli.js', raw=True)
+check('CLI 可从本站下载且是 node 脚本', st == 200 and txt.startswith('#!/usr/bin/env node'), str(st))
+
+print('7) 删除 + 鉴权')
 st, r = call('DELETE', f'/api/memos/{mid}')
 check('删除 memo', st == 200, r)
 st, r = call('DELETE', f'/api/todos/{tid}')

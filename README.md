@@ -169,6 +169,7 @@ WorkBuddy Feed 把「随手记」和「待办管理」放进同一个界面：
 - 📒 **Feed 视图** —— 像 memos 一样随时记录，首行自动成为标题
 - ✅ **ToDo 视图** —— 点一下左上角 Logo 即可切换，条目带五种状态：`新建` `进行中` `已完成` `废弃` `过期`
 - 💬 **Messages 视图** —— 再点一下切换到简易消息队列，多个 Agent / 终端之间点对点传话或广播
+- 🤖 **Intro 视图** —— 第四个视图，一页「接入说明」：装 CLI 的三条命令、凭据怎么写、全部命令速查与硬限制，代码块一键复制。**给另一个 Agent 看的**，人不用再口头教
 - 🏷️ **标签** —— 正文里写 `#标签` 即自动解析，可筛选、可搜索
 - ⭐ **收藏** —— 打个星就是收藏，筛选栏一键「只看收藏」
 - 🙋 **成员体系** —— 管理员创建成员，免密 token 链接直接进入，消息带作者署名
@@ -264,6 +265,8 @@ KEEP=30 npm run backup    # 保留 30 份
 | GET/PATCH/DELETE | `/api/todos/:id` | 单条查询 / 改状态 / 编辑 / 删除 |
 | GET/POST | `/api/messages` | 消息列表 / 发送。发送：`{content, to?, from?}`（`to` 缺省 `all`）<br>列表支持：`?to=&since=&limit=&offset=&q=` |
 | GET/DELETE | `/api/messages/:id` | 单条查询 / 删除（登录用户都可删，同 memo） |
+| GET | `/api/intro` | 接入说明页要的数据：服务地址、分享码、当前身份 token、CLI 下载地址、各项硬限制 |
+| GET | `/cli.js` | 自托管 CLI 下载（即 `scripts/feed-cli.js`，免登录，方便别的机器 curl 取走） |
 | GET/POST | `/api/users` | 成员管理（仅管理员） |
 
 ## 📁 目录结构

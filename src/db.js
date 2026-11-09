@@ -241,7 +241,7 @@ function deleteMessage(id) {
 
 // ------------------------------------------------------------------ users
 const stmtUserByToken = db.prepare(`SELECT id, name, role, token, created_at FROM users WHERE token = ?`);
-const stmtUserByName = db.prepare(`SELECT id, name, role FROM users WHERE name = ?`);
+const stmtUserByName = db.prepare(`SELECT id, name, role, token, created_at FROM users WHERE name = ?`);
 const stmtUserById = db.prepare(`SELECT id, name, role FROM users WHERE id = ?`);
 const stmtUsersAll = db.prepare(
   `SELECT id, name, role, token, created_at FROM users ORDER BY role DESC, created_at ASC`

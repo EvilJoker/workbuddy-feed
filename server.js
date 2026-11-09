@@ -59,6 +59,26 @@ const SESSION_MAX_AGE = 60 * 60 * 24 * 365; // 1 年：token 链接进入后长�
 // 星标收藏 = 藏在 tags 里的固定标签，前端 ★ 直接读写这个标签
 const FAV_TAG = '收藏';
 
+// 硬限制：只在这里定义一次，接口校验和「接入说明」页面都取这里的值，避免两处漂移
+const MAX_MSG_CHARS = 8000; // 单条消息正文上限
+const MAX_NAME_CHARS = 24; // 发送者 / 收件人名字上限（去空白后）
+
+// 接入说明页要展示的分享码：托管网关要求每个请求带 ?sharecode=，
+// 别人的 agent 拼命令时需要它。不配则页面留空让用户自己填（开源默认不配）。
+const SHARE_CODE = process.env.SHARE_CODE || '';
+
+// CLI 下载地址：本站自托管一份（内网也能下），GitHub 作为备用
+const CLI_RAW_URL =
+  process.env.CLI_RAW_URL ||
+  'https://raw.githubusercontent.com/EvilJoker/workbuddy-feed/main/scripts/feed-cli.js';
+
+let VERSION = '';
+try {
+  VERSION = require('./package.json').version || '';
+} catch {
+  /* package.json 缺失时不影响运行 */
+}
+
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // ---------------------------------------------------------------- 数据访问
@@ -113,8 +133,29 @@ function toMsgDto(row) {
 // 名字（发送者 / 收件人）：去掉空白、最长 24 字，'all' 表示广播
 function cleanName(v, fallback = '') {
   if (typeof v !== 'string') return fallback;
-  const s = v.replace(/\s+/g, '').slice(0, 24);
+  const s = v.replace(/\s+/g, '').slice(0, MAX_NAME_CHARS);
   return s || fallback;
+}
+
+// 对外访问地址：接入说明要把它给别人粘贴，所以不能是反代背后的内网地址。
+// 优先级：PUBLIC_BASE 配置 > Origin > Referer 的来源 > 转发头 > Host
+function publicBase(req) {
+  const fix = (u) => String(u || '').replace(/\/+$/, '');
+  if (process.env.PUBLIC_BASE) return fix(process.env.PUBLIC_BASE);
+  const origin = req.headers.origin;
+  if (origin && /^https?:\/\//i.test(origin)) return fix(origin);
+  const ref = req.headers.referer || req.headers.referrer;
+  if (ref) {
+    try {
+      const u = new URL(ref);
+      if (u.protocol === 'http:' || u.protocol === 'https:') return u.origin;
+    } catch {
+      /* 忽略畸形 Referer */
+    }
+  }
+  const proto = (req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${PORT}`;
+  return fix(`${proto}://${host}`);
 }
 
 // ---------------------------------------------------------------- 会话（无状态 HMAC cookie）
@@ -345,6 +386,32 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { name: s.name, role: s.role });
     }
 
+    // ---- 接入说明：给「另一个 agent」看的自助接入信息
+    // 页面靠它拼出可直接粘贴的命令；token 只返回当前登录者自己的那一个。
+    if (p === '/api/intro' && method === 'GET') {
+      const s = getSession(req);
+      const u = db.findUserByName(s.name);
+      const base = publicBase(req);
+      return sendJson(res, 200, {
+        ok: true,
+        base,
+        sharecode: url.searchParams.get('sharecode') || SHARE_CODE,
+        version: VERSION,
+        me: { name: s.name, role: s.role, token: (u && u.token) || '' },
+        cli: {
+          self: `${base}/cli.js`,
+          github: CLI_RAW_URL,
+        },
+        limits: {
+          msgChars: MAX_MSG_CHARS,
+          nameChars: MAX_NAME_CHARS,
+          queue: db.MESSAGE_LIMIT,
+          vaultMb: Math.round((vault.QUOTA / 1048576) * 10) / 10,
+          vaultFileMb: Math.round((vault.MAX_FILE / 1048576) * 10) / 10,
+        },
+      });
+    }
+
     // ---- 应急文件柜（默认关闭；必须人为授权开一个限时窗口才能用）
     // 设计见 src/vault.js：不进数据库，元数据是内容旁边的 JSON，窗口状态只在内存里。
     if (p === '/api/vault/status' && method === 'GET') {
@@ -501,7 +568,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const content = typeof body.content === 'string' ? body.content.trim() : '';
       if (!content) return sendJson(res, 400, { error: 'empty' });
-      if (content.length > 8000) return sendJson(res, 413, { error: 'too_long' });
+      if (content.length > MAX_MSG_CHARS) return sendJson(res, 413, { error: 'too_long' });
       // 发送者默认取登录身份，允许 body.from 覆盖（多台终端共用一个成员 token 时区分 agent）
       const sender = cleanName(body.from, s.name);
       const recipient = cleanName(body.to, 'all');
@@ -694,6 +761,22 @@ const server = http.createServer(async (req, res) => {
       }
 
       return sendJson(res, 405, { error: 'method_not_allowed' });
+    }
+
+    // ---- 自托管 CLI 下载（给别的 agent 用，免登录；内容就是本仓库的 scripts/feed-cli.js）
+    // 走本站是为了绕开 raw.githubusercontent.com 在内网被拦的情况。
+    if ((p === '/cli.js' || p === '/feed-cli.js') && (method === 'GET' || method === 'HEAD')) {
+      const file = path.join(__dirname, 'scripts', 'feed-cli.js');
+      return fs.readFile(file, (err, buf) => {
+        if (err) return sendJson(res, 404, { error: 'not_found' });
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Length': buf.length,
+          'Content-Disposition': 'attachment; filename="feed"',
+          'Cache-Control': 'no-store',
+        });
+        res.end(method === 'HEAD' ? undefined : buf);
+      });
     }
 
     if (p.startsWith('/api/')) return sendJson(res, 404, { error: 'not_found' });
