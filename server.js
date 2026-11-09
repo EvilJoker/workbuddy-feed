@@ -413,7 +413,6 @@ const server = http.createServer(async (req, res) => {
 
     const mm = p.match(/^\/api\/messages\/([^/]+)$/);
     if (mm) {
-      const s = getSession(req);
       const id = decodeURIComponent(mm[1]);
       if (!/^[0-9a-fA-F-]{36}$/.test(id)) return sendJson(res, 400, { error: 'bad_id' });
 
@@ -424,9 +423,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (method === 'DELETE') {
+        // 与 memo/todo 一致：登录用户都可删。不能用 sender 判权——
+        // sender 允许被 --from 覆盖（多终端共用一个 token 时区分 agent），
+        // 按名字判权会导致自己发的消息自己删不掉。
         const one = db.getMessage(id);
         if (!one) return sendJson(res, 404, { error: 'not_found' });
-        if (s.role !== 'admin' && one.sender !== s.name) return sendJson(res, 403, { error: 'forbidden' });
         db.deleteMessage(id);
         return sendJson(res, 200, { ok: true });
       }

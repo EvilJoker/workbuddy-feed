@@ -234,7 +234,7 @@ KEEP=30 npm run backup    # 保留 30 份
 | GET/POST | `/api/todos` | ToDo 列表 / 新增（可带 `status`）<br>列表支持服务端过滤：`?limit=&offset=&tag=&status=&q=&fav=1` |
 | GET/PATCH/DELETE | `/api/todos/:id` | 单条查询 / 改状态 / 编辑 / 删除 |
 | GET/POST | `/api/messages` | 消息列表 / 发送。发送：`{content, to?, from?}`（`to` 缺省 `all`）<br>列表支持：`?to=&since=&limit=&offset=&q=` |
-| GET/DELETE | `/api/messages/:id` | 单条查询 / 删除（仅发送者或管理员） |
+| GET/DELETE | `/api/messages/:id` | 单条查询 / 删除（登录用户都可删，同 memo） |
 | GET/POST | `/api/users` | 成员管理（仅管理员） |
 
 ## 📁 目录结构
